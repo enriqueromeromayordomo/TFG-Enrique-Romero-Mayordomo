@@ -1,0 +1,334 @@
+import xarray as xr
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+import os
+from scipy import stats
+from tqdm import tqdm
+
+path = r"F:\moduloydireccion"
+output_path = os.path.join(path, "resultados_iberia")
+os.makedirs(output_path, exist_ok=True)
+
+LAT_MIN, LAT_MAX = 36.0, 44.0
+LON_MIN, LON_MAX = -10.0, 4.0
+
+def process_year_iberia(year):
+    file_path = os.path.join(path, f"{year}modulo.nc")
+    try:
+        print(f"\nProcesando año {year}...")
+        ds = xr.open_dataset(file_path)
+        
+        ds_iberia = ds.sel(
+            latitude=slice(LAT_MAX, LAT_MIN),
+            longitude=slice(LON_MIN, LON_MAX)
+        )
+        
+        print("Calculando media para Iberia...")
+        annual_mean = float(ds_iberia['wind_speed_100m'].mean(dim=['time', 'latitude', 'longitude']).values)
+        
+        ds.close()
+        return annual_mean
+    except Exception as e:
+        print(f"Error procesando {year}: {str(e)}")
+        return np.nan
+
+years = list(range(1980, 2025))
+annual_means = []
+
+print("\nIniciando procesamiento para Península Ibérica...")
+for year in tqdm(years):
+    annual_mean = process_year_iberia(year)
+    annual_means.append(annual_mean)
+    
+    if (years.index(year) + 1) % 5 == 0 or year == years[-1]:
+        print(f"\nProgreso hasta {year}:")
+        progress = pd.DataFrame({
+            'Año': years[:len(annual_means)],
+            'Velocidad (m/s)': [f"{x:.3f}" if not np.isnan(x) else "NaN" for x in annual_means]
+        })
+        print(progress.tail(5))
+
+results = pd.DataFrame({
+    'Año': years,
+    'Velocidad_media': annual_means
+}).dropna()
+
+def find_best_change_point(years, values, min_year=2003, max_year=2010):
+    best_r2 = -np.inf
+    best_point = None
+    best_slopes = (None, None)
+    
+    test_points = np.arange(min_year, max_year + 0.5, 0.5)
+    
+    for point in test_points:
+        mask = years < point
+        if sum(mask) < 5 or sum(~mask) < 5:
+            continue
+            
+        slope1, intercept1, _, _, _ = stats.linregress(years[mask], values[mask])
+        slope2, intercept2, _, _, _ = stats.linregress(years[~mask], values[~mask])
+        
+        pred = np.where(mask, 
+                       intercept1 + slope1 * years,
+                       intercept2 + slope2 * years)
+        current_r2 = 1 - np.sum((values - pred)**2) / np.sum((values - np.mean(values))**2)
+        
+        if current_r2 > best_r2:
+            best_r2 = current_r2
+            best_point = point
+            best_slopes = (slope1, slope2)
+    
+    return best_point, best_slopes, best_r2
+
+x = results['Año'].values.astype(float)
+y = results['Velocidad_media'].values.astype(float)
+
+change_point, (slope1, slope2), r2_combined = find_best_change_point(x, y, 2003, 2010)
+print(f"\nMejor punto de cambio detectado: {change_point:.1f}")
+print(f"Tendencia antes: {slope1:.4f} m/s/año, después: {slope2:.4f} m/s/año")
+print(f"R² combinado: {r2_combined:.3f}")
+
+mask = x < change_point
+
+intercept1 = np.mean(y[mask]) - slope1 * np.mean(x[mask])
+intercept2 = np.mean(y[~mask]) - slope2 * np.mean(x[~mask])
+trend1 = np.polyval([slope1, intercept1], x[mask])
+trend2 = np.polyval([slope2, intercept2], x[~mask])
+
+y_detrended = y.copy()
+y_detrended[mask] = y[mask] - trend1
+y_detrended[~mask] = y[~mask] - trend2
+
+plt.figure(figsize=(12, 6))
+
+plt.plot(x, y_detrended, 'o-', color='royalblue', linewidth=1.5, markersize=6,
+         label='Velocidad destendencializada')
+
+plt.axhline(y=0, color='black', linestyle='--', linewidth=0.8)
+
+plt.plot(x[mask], trend1 - np.mean(y[mask]), '-', color='darkgreen', linewidth=2.5,
+         label=f'Tendencia 1980-{int(change_point)} ({slope1:.3f} m/s/año)')
+plt.plot(x[~mask], trend2 - np.mean(y[~mask]), '-', color='darkorange', linewidth=2.5,
+         label=f'Tendencia {int(change_point)+1}-2024 ({slope2:.3f} m/s/año)')
+
+plt.axvline(x=change_point, color='red', linestyle=':', linewidth=1.8,
+            label=f'Punto de cambio: {change_point:.1f}')
+
+plt.title('Velocidad del Viento en Península Ibérica (100m)', pad=15, fontsize=13)
+plt.xlabel('Año', fontsize=11, labelpad=8)
+plt.ylabel('Velocidad destendencializada (m s$^{-1}$)', fontsize=11, labelpad=8)
+plt.grid(True, alpha=0.15, linestyle='--')
+plt.legend(loc='upper right', framealpha=0.9)
+plt.xlim(1980, 2024)
+plt.ylim(-0.3, 0.3)
+
+plt.savefig(os.path.join(output_path, 'wind_stilling_iberia.png'), 
+            dpi=300, bbox_inches='tight')
+plt.show()
+
+results['Velocidad_destendencializada'] = y_detrended
+results['Periodo'] = np.where(results['Año'] < change_point, f'1980-{int(change_point)}', f'{int(change_point)+1}-2024')
+results.to_csv(os.path.join(output_path, 'wind_stilling_iberia.csv'), index=False)
+
+print("\nAnálisis completado. Resultados guardados en:", output_path)
+
+
+
+
+
+
+
+import xarray as xr
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+import os
+from scipy import stats
+from tqdm import tqdm
+
+path = r"F:\moduloydireccion"
+output_path = r"F:\moduloydireccion\resultados_iberia_tendencias"
+os.makedirs(output_path, exist_ok=True)
+
+LAT_MIN, LAT_MAX = 36.0, 44.0
+LON_MIN, LON_MAX = -10.0, 4.0
+
+input_file = os.path.join(r"F:\moduloydireccion\resultados_iberia", 'wind_stilling_iberia.csv')
+results = pd.read_csv(input_file)
+x = results['Año'].values
+y = results['Velocidad_media'].values
+
+change_points = np.arange(1995, 2016, 5) 
+
+def plot_segmented_trend(change_year, ax):
+    mask = x < change_year
+    
+    slope1, intercept1, _, _, _ = stats.linregress(x[mask], y[mask])
+    slope2, intercept2, _, _, _ = stats.linregress(x[~mask], y[~mask])
+    
+    trend1 = intercept1 + slope1 * x[mask]
+    trend2 = intercept2 + slope2 * x[~mask]
+    
+    y_detrended = y.copy()
+    y_detrended[mask] = y[mask] - trend1
+    y_detrended[~mask] = y[~mask] - trend2
+    
+    ax.plot(x, y_detrended, 'o-', color='royalblue', linewidth=1.2, markersize=4)
+    ax.axhline(0, color='black', linestyle='--', linewidth=0.6)
+    
+    ax.plot(x[mask], trend1 - np.mean(y[mask]), '-', color='darkgreen', linewidth=2,
+            label=f'1980-{change_year-1}: {slope1:.3f} m/s/año')
+    ax.plot(x[~mask], trend2 - np.mean(y[~mask]), '-', color='darkorange', linewidth=2,
+            label=f'{change_year}-2024: {slope2:.3f} m/s/año')
+    
+    ax.axvline(x=change_year, color='red', linestyle=':', linewidth=1.5)
+    
+    ax.set_title(f'Punto de cambio: {change_year}', fontsize=12)
+    ax.set_xlim(1980, 2024)
+    ax.set_ylim(-0.3, 0.3)
+    ax.grid(True, alpha=0.1)
+    ax.legend(loc='upper right', fontsize=9)
+
+fig, axes = plt.subplots(3, 2, figsize=(15, 15))
+axes = axes.flatten()
+
+for i, change_year in enumerate(change_points):
+    plot_segmented_trend(change_year, axes[i])
+    
+    if i >= 4:
+        axes[i].set_xlabel('Año', fontsize=10)
+        axes[i].set_ylabel('Velocidad destendencializada (m s$^{-1}$)', fontsize=10)
+
+if len(change_points) < len(axes):
+    fig.delaxes(axes[-1])
+
+fig.suptitle('Análisis de Wind Stilling en Península Ibérica con Diferentes Puntos de Cambio', 
+             y=1.02, fontsize=14)
+
+plt.tight_layout()
+
+plt.savefig(os.path.join(output_path, 'comparacion_puntos_cambio.png'), 
+            dpi=300, bbox_inches='tight')
+plt.show()
+
+for change_year in change_points:
+    plt.figure(figsize=(10, 5))
+    plot_segmented_trend(change_year, plt.gca())
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_path, f'tendencia_cambio_{change_year}.png'), 
+                dpi=200, bbox_inches='tight')
+    plt.close()
+
+print(f"\nAnálisis completado. Gráficos guardados en: {output_path}")
+
+
+
+
+
+
+
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+from scipy.ndimage import gaussian_filter1d
+import os
+from IPython.display import display
+
+csv_path = r"E:\windstilling\serie_viento_iberia.csv"
+output_dir = r"E:\windstilling"
+os.makedirs(output_dir, exist_ok=True)
+
+df = pd.read_csv(csv_path)
+df.columns = ['Año', 'Velocidad (m/s)']
+years = df['Año'].values
+speeds = df['Velocidad (m/s)'].values
+
+smoothed = gaussian_filter1d(speeds, sigma=1)
+
+def detect_wind_stilling(years, speeds, min_segment=5):
+    change_points = []
+    n = len(years)
+    
+    for i in range(min_segment, n - min_segment):
+        X_left = years[:i].reshape(-1, 1)
+        y_left = speeds[:i]
+        reg_left = LinearRegression().fit(X_left, y_left)
+        slope_left = reg_left.coef_[0]
+        
+        X_right = years[i:].reshape(-1, 1)
+        y_right = speeds[i:]
+        reg_right = LinearRegression().fit(X_right, y_right)
+        slope_right = reg_right.coef_[0]
+        
+        if slope_left < 0 and slope_right > 0:
+            r2_left = reg_left.score(X_left, y_left)
+            r2_right = reg_right.score(X_right, y_right)
+            r2_combined = (r2_left * i + r2_right * (n - i)) / n
+            
+            change_points.append({
+                'change_index': i,
+                'change_year': years[i],
+                'left_slope': slope_left,
+                'right_slope': slope_right,
+                'left_intercept': reg_left.intercept_,
+                'right_intercept': reg_right.intercept_,
+                'r2': r2_combined
+            })
+    
+    return change_points
+
+changes = detect_wind_stilling(years, speeds)
+
+if not changes:
+    print("No se encontraron patrones 'wind stilling'")
+else:
+    print(f"Se encontraron {len(changes)} patrones:")
+    
+    for idx, change in enumerate(changes, 1):
+        plt.figure(figsize=(10, 5))
+        
+        plt.plot(years, speeds, 'b-o', markersize=4, label='Datos originales', alpha=0.7)
+        plt.plot(years, smoothed, '--', color='orange', label='Suavizado', linewidth=1.5)
+        
+        left_trend_years = years[:change['change_index']]
+        left_trend = change['left_slope'] * left_trend_years + change['left_intercept']
+        plt.plot(left_trend_years, left_trend, 'r--', linewidth=2, 
+                 label=f'Descendente: {change["left_slope"]:.4f} m/s/año')
+        
+        right_trend_years = years[change['change_index']:]
+        right_trend = change['right_slope'] * right_trend_years + change['right_intercept']
+        plt.plot(right_trend_years, right_trend, 'g--', linewidth=2,
+                 label=f'Ascendente: {change["right_slope"]:.4f} m/s/año')
+        
+        change_year = change['change_year']
+        change_speed = speeds[change['change_index']]
+        plt.scatter(change_year, change_speed, color='red', s=100, 
+                    label=f'Cambio: {int(change_year)}')
+        plt.axvline(x=change_year, color='gray', linestyle=':', alpha=0.5)
+        
+        plt.title(f'Wind Stilling Pattern #{idx} (Cambio en {int(change_year)})', fontsize=12)
+        plt.xlabel('Año')
+        plt.ylabel('Velocidad del viento (m/s)')
+        plt.grid(True, linestyle='--', alpha=0.6)
+        plt.legend(loc='upper right')
+        
+        plt.text(0.02, 0.05,
+                f"Periodo descendente: {years[0]}-{int(change_year)}\n"
+                f"Periodo ascendente: {int(change_year)}-{years[-1]}\n"
+                f"R² combinado: {change['r2']:.3f}",
+                transform=plt.gca().transAxes,
+                bbox=dict(facecolor='white', alpha=0.8))
+        
+        plt.show()
+        
+        plot_path = os.path.join(output_dir, f'wind_stilling_{int(change_year)}.png')
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print(f"Gráfico {idx} guardado: {plot_path}")
+        print(f" - Cambio en {int(change_year)}: "
+              f"Descendente ({change['left_slope']:.4f}) -> "
+              f"Ascendente ({change['right_slope']:.4f})\n")
