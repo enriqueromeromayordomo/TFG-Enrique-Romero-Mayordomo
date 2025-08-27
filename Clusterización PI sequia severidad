@@ -1,0 +1,67 @@
+import xarray as xr
+import numpy as np
+import pandas as pd
+from sklearn.cluster import KMeans
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib.colors as mcolors
+from pathlib import Path
+
+ruta_nc = "E:/windgust/data_daily_gust_1950_2022.nc"
+ruta_guardado = Path("Escritorio")
+ruta_guardado.mkdir(parents=True, exist_ok=True)
+
+print("Cargando datos de wind gust...")
+ds = xr.open_dataset(ruta_nc)
+da = ds[list(ds.data_vars)[0]]  
+
+da = da.sel(lon=slice(-10, 4), lat=slice(35.5, 44.5))
+
+print("Calculando severidad (percentil 95)...")
+severity = da.quantile(0.95, dim='time')
+
+lat, lon = np.meshgrid(severity['lat'], severity['lon'], indexing='ij')
+df = pd.DataFrame({
+    'lat': lat.ravel(),
+    'lon': lon.ravel(),
+    'severidad_media': severity.values.ravel()
+}).dropna()
+
+print("Ejecutando KMeans con 5 clusters (severidad)...")
+X = df[['severidad_media']].values
+kmeans = KMeans(n_clusters=5, random_state=0, n_init='auto')
+df['cluster_raw'] = kmeans.fit_predict(X)
+
+orden = df.groupby('cluster_raw')['severidad_media'].mean().sort_values().index
+mapa_ordenado = {old: new for new, old in enumerate(orden)}
+df['cluster'] = df['cluster_raw'].map(mapa_ordenado)
+
+print("Generando mapa...")
+fig = plt.figure(figsize=(10, 8))
+ax = plt.axes(projection=ccrs.PlateCarree())
+ax.set_extent([-10, 4, 35.5, 44.5], crs=ccrs.PlateCarree())
+
+ax.add_feature(cfeature.LAND, facecolor='lightgray')
+ax.add_feature(cfeature.OCEAN, facecolor='lightblue')
+ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
+
+gl = ax.gridlines(draw_labels=True, linewidth=0.3, color='gray', alpha=0.5)
+gl.top_labels = gl.right_labels = False
+
+cmap = plt.get_cmap('tab10', 5)
+bounds = np.arange(6) - 0.5
+norm = mcolors.BoundaryNorm(bounds, cmap.N)
+
+scatter = ax.scatter(df['lon'], df['lat'], c=df['cluster'], cmap=cmap, norm=norm, s=25)
+cbar = plt.colorbar(scatter, ax=ax, ticks=np.arange(5), boundaries=bounds)
+cbar.set_label("Cluster por Severidad (percentil 95)")
+
+plt.title("Clusters de Severidad del Viento (Rachas) - Península Ibérica", fontsize=14)
+
+output_path = ruta_guardado / "clustering_severidad_rachas.png"
+plt.savefig(output_path, dpi=300, bbox_inches='tight')
+plt.show()
+
+print(f" Gráfico guardado en: {output_path}")
