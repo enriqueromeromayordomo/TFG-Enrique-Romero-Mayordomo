@@ -1,0 +1,137 @@
+import xarray as xr
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+import os
+from scipy import stats
+from tqdm import tqdm
+
+path = r"F:\moduloydireccion"
+output_path = r"F:\moduloydireccion\resultados"
+os.makedirs(output_path, exist_ok=True)
+
+def process_year(year):
+    file_path = os.path.join(path, f"{year}modulo.nc")
+    try:
+        print(f"\nProcesando año {year}...")
+        ds = xr.open_dataset(file_path)
+        
+        print("Calculando media espacial y temporal...")
+        annual_mean = float(ds['wind_speed_100m'].mean(dim=['time', 'latitude', 'longitude']).values)
+        
+        ds.close()
+        return annual_mean
+    except Exception as e:
+        print(f"Error procesando {year}: {str(e)}")
+        return np.nan
+
+years = list(range(1980, 2025))
+annual_means = []
+
+print("\nIniciando procesamiento de datos horarios completos...")
+for year in tqdm(years):
+    annual_mean = process_year(year)
+    annual_means.append(annual_mean)
+    
+    if (years.index(year) + 1) % 5 == 0 or year == years[-1]:
+        print(f"\nProgreso hasta {year}:")
+        progress = pd.DataFrame({
+            'Año': years[:len(annual_means)],
+            'Velocidad (m/s)': [f"{x:.3f}" if not np.isnan(x) else "NaN" for x in annual_means]
+        })
+        print(progress.tail(5))
+
+results = pd.DataFrame({
+    'Año': years,
+    'Velocidad_media': annual_means
+}).dropna()
+
+x = results['Año'].values.astype(float)
+y = results['Velocidad_media'].values.astype(float)
+
+change_point = 2003.5
+mask = x < change_point
+
+slope1, intercept1, r1, p1, _ = stats.linregress(x[mask], y[mask])
+slope2, intercept2, r2, p2, _ = stats.linregress(x[~mask], y[~mask])
+
+trend1 = intercept1 + slope1 * x[mask]
+trend2 = intercept2 + slope2 * x[~mask]
+
+global_mean = np.mean(y)
+y_detrended = y - global_mean
+y_detrended[mask] = y[mask] - trend1
+y_detrended[~mask] = y[~mask] - trend2
+
+plt.figure(figsize=(14, 7))
+
+plt.plot(x, y_detrended, 'o-', color='royalblue', linewidth=1.5, markersize=6,
+         label='Velocidad destendencializada')
+
+plt.axhline(y=0, color='black', linestyle='--', linewidth=0.8)
+
+plt.plot(x[mask], trend1 - global_mean, '-', color='darkgreen', linewidth=2.5,
+         label=f'Tendencia 1980-2003 ({slope1:.3f} m/s/año)')
+plt.plot(x[~mask], trend2 - global_mean, '-', color='darkorange', linewidth=2.5,
+         label=f'Tendencia 2004-2024 ({slope2:.3f} m/s/año)')
+
+plt.axvline(x=change_point, color='red', linestyle=':', linewidth=1.8,
+            label=f'Punto de cambio: {change_point}')
+
+stats_text = f"""Estadísticas:
+Período 1980-2003.5:
+  Tendencia = {slope1:.4f} m/s/año
+  R² = {r1**2:.2f}, p = {p1:.4f}
+  
+Período 2003.5-2024:
+  Tendencia = {slope2:.4f} m/s/año
+  R² = {r2**2:.2f}, p = {p2:.4f}
+  
+Correlación total:
+  R = {np.corrcoef(x, y)[0,1]:.2f}"""
+
+plt.text(0.03, 0.82, stats_text, transform=plt.gca().transAxes,
+         bbox=dict(facecolor='white', alpha=0.9, edgecolor='gray'), 
+         fontsize=10, fontfamily='monospace')
+
+plt.title('Análisis de Wind Stilling en Europa (1980-2024)\nVelocidad del Viento a 100m Destendencializada', 
+          pad=20, fontsize=14)
+plt.xlabel('Año', fontsize=12, labelpad=10)
+plt.ylabel('Velocidad destendencializada (m s$^{-1}$)', fontsize=12, labelpad=10)
+plt.grid(True, alpha=0.2, linestyle='--')
+
+plt.legend(loc='upper right', framealpha=0.9, shadow=True)
+
+plt.xlim(1980, 2024)
+plt.ylim(-0.25, 0.25)
+
+plt.text(0.98, 0.02, 'Datos: ERA5 | Análisis: Python', 
+         transform=plt.gca().transAxes, ha='right', 
+         fontsize=9, alpha=0.7)
+
+plt.savefig(os.path.join(output_path, 'wind_stilling_analysis_improved.png'), 
+            dpi=350, bbox_inches='tight', transparent=False)
+plt.show()
+
+results['Velocidad_destendencializada'] = y_detrended
+results['Periodo'] = np.where(results['Año'] < change_point, '1980-2003', '2004-2024')
+
+results['Anomalia_periodo'] = np.where(
+    results['Periodo'] == '1980-2003',
+    results['Velocidad_media'] - intercept1 - slope1 * results['Año'],
+    results['Velocidad_media'] - intercept2 - slope2 * results['Año']
+)
+
+results.to_csv(os.path.join(output_path, 'wind_stilling_detailed_results.csv'), 
+               index=False, float_format='%.5f')
+
+print("\nAnálisis completado. Resultados guardados en:", output_path)
+
+
+
+
+
+
+
+
+
