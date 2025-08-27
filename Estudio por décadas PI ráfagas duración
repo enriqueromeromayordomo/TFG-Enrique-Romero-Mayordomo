@@ -1,0 +1,152 @@
+import os
+import numpy as np
+import pandas as pd
+import xarray as xr
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.cluster import KMeans
+from pathlib import Path
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib.colors as mcolors
+
+ruta_nc = r"F:\windgust\data_daily_gust_1950_2022.nc"
+ruta_salida = Path(r"F:\visual studio code\comparaciones_duracion_clusters_iberica")
+ruta_salida.mkdir(parents=True, exist_ok=True)
+
+ds = xr.open_dataset(ruta_nc)
+var_name = list(ds.data_vars)[0]
+da = ds[var_name]
+
+fechas = pd.to_datetime(da['time'].values.astype(int).astype(str), format="%Y%m%d", errors='coerce')
+da['time'] = fechas
+
+da = da.sel(lon=slice(-10, 4), lat=slice(35.5, 44.5)).load()
+
+decadas = [(1950, 1959), (1960, 1969), (1970, 1979),
+           (1980, 1989), (1990, 1999), (2000, 2009), (2010, 2022)]
+
+def calcular_area_km2(latitudes, resol=0.25):
+    R = 6371
+    dlat = np.radians(resol)
+    dlon = np.radians(resol)
+    return (R**2) * dlat * dlon * np.cos(np.radians(latitudes))
+
+def calcular_duracion_media(serie_temporal, umbral_punto):
+    if hasattr(serie_temporal, 'values'):
+        serie_temporal = serie_temporal.values
+    eventos = serie_temporal > umbral_punto
+    eventos_diff = np.diff(np.concatenate(([False], eventos, [False])).astype(int))
+    inicios = np.where(eventos_diff == 1)[0]
+    finales = np.where(eventos_diff == -1)[0]
+    duraciones = finales - inicios
+    return np.mean(duraciones) if len(duraciones) > 0 else 0
+
+historico_clusters = []
+colores = sns.color_palette("tab10", 5)
+
+for inicio, fin in decadas:
+    print(f"\nProcesando duración media {inicio}-{fin}...")
+    da_decada = da.sel(time=slice(f"{inicio}-01-01", f"{fin}-12-31"))
+    umbral = da_decada.quantile(0.95, dim='time')
+
+    duracion_media = xr.apply_ufunc(
+        calcular_duracion_media,
+        da_decada,
+        umbral,
+        input_core_dims=[['time'], []],
+        exclude_dims=set(['time']),
+        vectorize=True,
+        dask='allowed'
+    ).compute()
+
+    lats, lons = np.meshgrid(duracion_media['lat'], duracion_media['lon'], indexing='ij')
+    df = pd.DataFrame({
+        'lat': lats.ravel(),
+        'lon': lons.ravel(),
+        'duracion_media': duracion_media.values.ravel()
+    }).dropna()
+
+    df = df[df['duracion_media'] > 0]  
+
+    kmeans = KMeans(n_clusters=5, random_state=0, n_init='auto')
+    df['cluster_raw'] = kmeans.fit_predict(df[['duracion_media']])
+    orden = df.groupby('cluster_raw')['duracion_media'].mean().sort_values().index
+    df['cluster'] = df['cluster_raw'].map({v: i for i, v in enumerate(orden)})
+
+    df['area_km2'] = calcular_area_km2(df['lat'])
+    resumen = df.groupby('cluster').agg(
+        area_total=('area_km2', 'sum'),
+        media_duracion=('duracion_media', 'mean')
+    ).reset_index()
+    resumen['decada'] = f"{inicio}-{fin}"
+    historico_clusters.append(resumen)
+
+    fig = plt.figure(figsize=(10, 10))
+    ax = plt.subplot(2, 1, 1, projection=ccrs.PlateCarree())
+    ax.set_extent([-11, 6, 34, 45], crs=ccrs.PlateCarree())
+    ax.add_feature(cfeature.LAND, facecolor='lightgray')
+    ax.add_feature(cfeature.OCEAN, facecolor='lightblue')
+    ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+    ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
+    gl = ax.gridlines(draw_labels=True, linewidth=0.3, color='gray', alpha=0.5)
+    gl.top_labels = gl.right_labels = False
+
+    cmap = mcolors.ListedColormap(colores)
+    bounds = np.arange(6) - 0.5
+    norm = mcolors.BoundaryNorm(bounds, cmap.N)
+
+    scatter = ax.scatter(df['lon'], df['lat'], c=df['cluster'],
+                         cmap=cmap, norm=norm, s=25)
+    cbar = plt.colorbar(scatter, ax=ax, ticks=np.arange(5), boundaries=bounds)
+    cbar.set_label("Cluster por Duración Media")
+    ax.set_title(f"Mapa Clusters de Duración {inicio}-{fin}")
+
+    ax2 = plt.subplot(2, 1, 2)
+    ax2.axis('off')
+    for i, row in resumen.iterrows():
+        ax2.text(0, 1 - i * 0.15,
+                 f"Cluster {int(row.cluster)}: {row.area_total:.0f} km², Media: {row.media_duracion:.2f} días",
+                 fontsize=11, color=colores[i])
+
+    plt.savefig(ruta_salida / f"mapa_duracion_{inicio}_{fin}.png", dpi=300, bbox_inches='tight')
+    plt.show()
+
+    plt.figure(figsize=(8, 6))
+    for c in range(5):
+        sns.kdeplot(df[df['cluster'] == c]['duracion_media'], label=f'Cluster {c}', color=colores[c])
+    plt.xlabel("Duración Media (días)")
+    plt.ylabel("Densidad")
+    plt.title(f"Distribución de Duración por Cluster ({inicio}-{fin})")
+    plt.legend()
+    plt.savefig(ruta_salida / f"density_duracion_{inicio}_{fin}.png", dpi=300, bbox_inches='tight')
+    plt.show()
+
+hist_df = pd.concat(historico_clusters)
+csv_path = ruta_salida / "historico_clusters_duracion.csv"
+hist_df.to_csv(csv_path, index=False)
+
+fig, axes = plt.subplots(2, 1, figsize=(10, 10), sharex=True)
+
+sns.lineplot(data=hist_df, x='decada', y='area_total', hue='cluster', marker="o", palette=colores, ax=axes[0])
+axes[0].set_title("Evolución del Tamaño de los Clusters (km²)")
+axes[0].set_ylabel("Área (km²)")
+
+sns.lineplot(data=hist_df, x='decada', y='media_duracion', hue='cluster', marker="o", palette=colores, ax=axes[1])
+axes[1].set_title("Evolución de la Duración Media por Cluster")
+axes[1].set_ylabel("Duración Media (días)")
+
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.savefig(ruta_salida / "evolucion_clusters_duracion.png", dpi=300)
+plt.show()
+
+pivot_duracion = hist_df.pivot(index="decada", columns="cluster", values="media_duracion")
+pivot_duracion.plot(kind="bar", stacked=True, figsize=(10, 6), colormap="tab10")
+plt.title("Duración Media por Década (Barras Apiladas)")
+plt.ylabel("Duración media (días)")
+plt.xlabel("Década")
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.savefig(ruta_salida / "duracion_clusters_barras_apiladas.png", dpi=300)
+plt.show()
