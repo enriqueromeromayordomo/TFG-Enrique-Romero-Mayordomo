@@ -1,0 +1,52 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.cluster import KMeans
+from pathlib import Path
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib.colors as mcolors
+import ast
+
+ruta_csv = "E:/extremoscsv/total_extremos.csv"
+ruta_guardado = Path("Escritorio")
+ruta_guardado.mkdir(parents=True, exist_ok=True)
+
+print("Procesando datos de vientos extremos...")
+df = pd.read_csv(ruta_csv)
+df['dur_pdf'] = df['dur_pdf'].apply(ast.literal_eval)
+df = df[(df['lon'] >= -10) & (df['lon'] <= 4) & (df['lat'] >= 35.5) & (df['lat'] <= 44.5)]
+X = np.vstack(df['dur_pdf'].values)
+
+print("Calculando clusters de duración...")
+kmeans = KMeans(n_clusters=5, random_state=0, n_init='auto')
+df['cluster'] = kmeans.fit_predict(X)
+
+duracion_media = df.groupby('cluster')['duracion_media'].mean()
+orden = duracion_media.sort_values().index
+df['cluster'] = df['cluster'].replace({old:new for new,old in enumerate(orden)})
+
+fig = plt.figure(figsize=(12,8))
+ax = plt.axes(projection=ccrs.PlateCarree())
+ax.set_extent([-10,4,35.5,44.5])
+
+ax.add_feature(cfeature.LAND, facecolor='lightgray')
+ax.add_feature(cfeature.OCEAN, facecolor='lightblue')
+ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
+
+gl = ax.gridlines(draw_labels=True, linewidth=0.3, color='gray', alpha=0.5)
+gl.top_labels = gl.right_labels = False
+
+cmap = plt.get_cmap('viridis', 5)
+scatter = ax.scatter(df['lon'], df['lat'], c=df['cluster'], cmap=cmap, s=25, alpha=0.8)
+cbar = plt.colorbar(scatter, ticks=range(5), ax=ax)
+cbar.set_label("Duración de vientos\n(0=menor, 4=mayor)")
+
+plt.title("Clusters de Duración de Vientos Extremos\nPenínsula Ibérica (1940-2024)", pad=20)
+
+output_path = ruta_guardado / "vientos_duracion_iberica.png"
+plt.savefig(output_path, dpi=300, bbox_inches='tight')
+plt.show()
+
+print(f"Resultados guardados en: {output_path}")
