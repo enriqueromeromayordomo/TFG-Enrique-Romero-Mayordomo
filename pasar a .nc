@@ -6,7 +6,7 @@ nc_dir = r"E:\nc"
 
 os.makedirs(nc_dir, exist_ok=True)
 
-years = range(2020, 2024)
+years = range(1940, 2024)
 
 for year in years:
     grib_file = os.path.join(grib_dir, f"{year}.grib")
