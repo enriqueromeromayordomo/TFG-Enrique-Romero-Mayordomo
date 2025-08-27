@@ -1,0 +1,48 @@
+import xarray as xr
+import numpy as np
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from datetime import datetime
+
+archivo = r"F:\moduloydireccion\2024modulo.nc"
+
+ds = xr.open_dataset(archivo)
+
+fecha_objetivo = np.datetime64("2024-01-03T12:00")
+
+if fecha_objetivo not in ds.time.values:
+    raise ValueError("La fecha 2024-01-03T12:00 no está disponible en el archivo.")
+
+ds_sel = ds.sel(time=fecha_objetivo)
+
+ws = ds_sel['wind_speed_100m']
+wd = ds_sel['wind_direction_100m']
+
+wd_rad = np.deg2rad(wd)
+u = -ws * np.sin(wd_rad)
+v = -ws * np.cos(wd_rad)
+
+step = 5
+lons = ds.longitude.values[::step]
+lats = ds.latitude.values[::step]
+U = u[::step, ::step]
+V = v[::step, ::step]
+Lon, Lat = np.meshgrid(lons, lats)
+
+fig = plt.figure(figsize=(12, 10))
+ax = plt.axes(projection=ccrs.PlateCarree())
+ax.set_title("Dirección del viento a 100m - 3 de enero 2024, 12:00", fontsize=14)
+
+ax.coastlines()
+ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+ax.add_feature(cfeature.LAND, facecolor='lightgray')
+ax.add_feature(cfeature.OCEAN, facecolor='lightblue')
+
+qv = ax.quiver(Lon, Lat, U, V, scale=700, width=0.0025, headlength=4)
+
+ax.quiverkey(qv, 0.9, -0.1, 10, '10 m/s', labelpos='E')
+
+
+plt.tight_layout()
+plt.show()
