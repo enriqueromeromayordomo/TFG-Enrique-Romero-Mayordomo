@@ -1,0 +1,23 @@
+import xarray as xr
+import matplotlib.pyplot as plt
+
+nc_file = r"E:\moduloydireccion\2024modulo.nc"
+
+ds = xr.open_dataset(nc_file)
+
+lat = 20
+lon = 20
+
+wind_speed_series = ds["wind_speed_100m"].sel(latitude=lat, longitude=lon, method="nearest")
+
+ds.close()
+
+plt.figure(figsize=(12, 5))
+plt.plot(wind_speed_series.time, wind_speed_series.values, color='blue', label="Velocidad del viento (m/s)")
+plt.title(f"Serie Temporal del Módulo del Viento en Lat {lat}, Lon {lon} (2024)")
+plt.xlabel("Fecha")
+plt.ylabel("Velocidad del viento (m/s)")
+plt.legend()
+plt.grid(True, linestyle="--", alpha=0.6)
+plt.xticks(rotation=45)
+plt.show()
