@@ -1,0 +1,127 @@
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
+import xarray as xr
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+from pathlib import Path
+
+nc_file = r"E:\moduloydireccion\2024modulo.nc" 
+min_drought_days = 5           
+timestep = '3h'               
+save_plots = False            
+
+hours_per_step = pd.Timedelta(timestep).total_seconds() / 3600
+min_steps = int((min_drought_days * 24) / hours_per_step)
+
+ds = xr.open_dataset(nc_file)
+
+lats = ds['latitude'].values
+lons = ds['longitude'].values
+times = pd.to_datetime(ds['time'].values)
+
+viento_var = None
+for var in ds.data_vars:
+    if 'mod' in var.lower() or 'wind' in var.lower():
+        viento_var = var
+        break
+if viento_var is None:
+    raise KeyError("No se encontró la variable del módulo de viento en el NetCDF.")
+
+viento = ds[viento_var]
+
+for lat_idx in range(len(lats)):
+    for lon_idx in range(len(lons)):
+
+        serie = viento.isel(latitude=lat_idx, longitude=lon_idx).values
+        serie = pd.Series(serie, index=times)
+
+        if np.isnan(serie).all():
+            continue  
+
+        serie_resampled = serie.resample(timestep).mean()
+        threshold = np.percentile(serie_resampled.dropna(), 20)
+        below_threshold = serie_resampled < threshold
+
+        df = pd.DataFrame({'wind': serie_resampled, 'below': below_threshold.astype(int)})
+        df['group'] = (df['below'].diff(1) != 0).cumsum()
+        drought_groups = df[df['below'] == 1].groupby('group')
+
+        valid_droughts = {}
+        for group_id, group in drought_groups:
+            duration = len(group)
+            if duration >= min_steps:
+                severity = (threshold - group['wind']).sum()
+                valid_droughts[group_id] = {
+                    'start': group.index[0],
+                    'end': group.index[-1],
+                    'duration_steps': duration,
+                    'duration_hours': duration * hours_per_step,
+                    'severity': severity,
+                    'data': group
+                }
+
+        num_droughts = len(valid_droughts)
+
+        print(f"Nodo ({lats[lat_idx]:.2f}°, {lons[lon_idx]:.2f}°):")
+        if num_droughts == 0:
+            print("  No ha habido evento de sequía.\n")
+            continue
+
+        print(f"  Valor del percentil 20 (umbral de sequía): {threshold:.2f} m/s")
+        print(f"  Se han encontrado {num_droughts} periodo(s) de sequía:")
+        duraciones = []
+        severidades = []
+
+        for i, drought in enumerate(valid_droughts.values(), 1):
+            dur = drought['duration_hours']
+            sev = drought['severity']
+            duraciones.append(dur)
+            severidades.append(sev)
+
+            print(f"    Sequía #{i}: {drought['start']} → {drought['end']}, "
+                  f"Duración = {dur:.0f} horas "
+                  f"({drought['duration_steps']} pasos), Severidad = {sev:.2f}")
+        print()
+
+        plt.figure(figsize=(12, 4))
+        plt.plot(df.index, df['wind'], label='Velocidad del viento', color='steelblue')
+        plt.axhline(y=threshold, color='orange', linestyle='--', label='Percentil 20')
+
+        for i, drought in enumerate(valid_droughts.values(), 1):
+            plt.fill_between(drought['data'].index, drought['data']['wind'], threshold,
+                             where=drought['data']['wind'] < threshold,
+                             interpolate=True, color='green', alpha=0.4,
+                             label="Sequía" if i == 1 else "")
+
+        plt.title(f"Viento en nodo ({lats[lat_idx]:.2f}°, {lons[lon_idx]:.2f}°) - Timestep: {timestep}")
+        plt.xlabel("Tiempo")
+        plt.ylabel("Velocidad del viento")
+        plt.legend()
+        plt.tight_layout()
+
+        if save_plots:
+            Path("graficas_sequias").mkdir(exist_ok=True)
+            fname = f"graficas_sequias/sequia_{lats[lat_idx]:.2f}_{lons[lon_idx]:.2f}.png"
+            plt.savefig(fname)
+            plt.close()
+        else:
+            plt.show()
+
+        plt.figure(figsize=(10, 4))
+        plt.subplot(1, 2, 1)
+        plt.hist(duraciones, bins=10, color='skyblue', edgecolor='black')
+        plt.title("Histograma de Duraciones (horas)")
+        plt.xlabel("Duración (h)")
+        plt.ylabel("Frecuencia")
+
+        plt.subplot(1, 2, 2)
+        plt.hist(severidades, bins=10, color='salmon', edgecolor='black')
+        plt.title("Histograma de Severidades")
+        plt.xlabel("Severidad acumulada")
+        plt.ylabel("Frecuencia")
+
+        plt.suptitle(f"Histograma - Nodo ({lats[lat_idx]:.2f}°, {lons[lon_idx]:.2f}°)")
+        plt.tight_layout()
+        plt.show()
