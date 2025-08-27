@@ -1,0 +1,72 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from pathlib import Path
+import matplotlib.colors as mcolors
+
+ruta_csv = "E:/sequiascsv/total_sequias.csv"
+ruta_guardado = Path("Escritorio")
+ruta_guardado.mkdir(parents=True, exist_ok=True)
+
+df = pd.read_csv(ruta_csv)
+df = df[(df['lon'] >= -10) & (df['lon'] <= 4) & (df['lat'] >= 35.5) & (df['lat'] <= 44.5)]
+
+df['severidad_norm'] = (df['severidad_media'] - df['severidad_media'].min()) / (df['severidad_media'].max() - df['severidad_media'].min())
+df['duracion_norm'] = (df['duracion_media'] - df['duracion_media'].min()) / (df['duracion_media'].max() - df['duracion_media'].min())
+
+df['score_eolico'] = 0.6 * df['severidad_norm'] + 0.4 * df['duracion_norm']
+df['clasificacion_eolica'] = pd.qcut(df['score_eolico'], q=5, labels=[1, 2, 3, 4, 5])
+
+fig = plt.figure(figsize=(12, 10))
+ax = plt.axes(projection=ccrs.PlateCarree())
+ax.set_extent([-10, 4, 35.5, 44.5], crs=ccrs.PlateCarree())
+
+ax.add_feature(cfeature.LAND, facecolor='lightgray')
+ax.add_feature(cfeature.OCEAN, facecolor='lightblue')
+ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
+
+gl = ax.gridlines(draw_labels=True, linewidth=0.3, color='gray', alpha=0.5)
+gl.top_labels = False
+gl.right_labels = False
+
+cmap = mcolors.LinearSegmentedColormap.from_list('eolico_cmap', ['darkgreen', 'limegreen', 'yellow', 'orange', 'red'])
+bounds = np.arange(6) + 0.5
+norm = mcolors.BoundaryNorm(bounds, cmap.N)
+
+scatter = ax.scatter(
+    df['lon'], 
+    df['lat'], 
+    c=df['clasificacion_eolica'], 
+    cmap=cmap, 
+    norm=norm, 
+    s=30,
+    alpha=0.7,
+    edgecolors='k',
+    linewidths=0.2
+)
+
+cbar = plt.colorbar(scatter, ax=ax, ticks=np.arange(1, 6))
+cbar.set_label("Clasificación de idoneidad eólica\n(1 = mejor, 5 = peor)")
+cbar.ax.invert_yaxis()
+
+mejores_zonas = df[df['clasificacion_eolica'] == 1]
+ax.scatter(
+    mejores_zonas['lon'], 
+    mejores_zonas['lat'], 
+    c='lime', 
+    s=50, 
+    edgecolors='darkgreen',
+    linewidths=1,
+    label='Zonas óptimas'
+)
+
+plt.legend(loc='upper right')
+plt.title("Zonas Óptimas para Parques Eólicos en la Península Ibérica\nBasado en Severidad y Duración de Sequías", fontsize=14, pad=20)
+
+output_path = ruta_guardado / "zonas_optimas_eolicas_iberica.png"
+plt.savefig(output_path, dpi=300, bbox_inches='tight')
+plt.show()
+
