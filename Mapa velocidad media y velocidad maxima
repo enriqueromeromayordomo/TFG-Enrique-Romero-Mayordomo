@@ -1,0 +1,43 @@
+import xarray as xr
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+
+archivo = r"F:\moduloydireccion\2024modulo.nc"
+ds = xr.open_dataset(archivo)
+
+media_anual = ds['wind_speed_100m'].mean(dim='time')
+maximo_anual = ds['wind_speed_100m'].max(dim='time')
+
+fig, (ax1, ax2) = plt.subplots(
+    ncols=2, 
+    figsize=(18, 6), 
+    subplot_kw={'projection': ccrs.PlateCarree()}
+)
+
+def configurar_mapa(ax):
+    ax.coastlines(resolution='50m', linewidth=0.8)
+    ax.add_feature(cfeature.BORDERS, linestyle=':', linewidth=0.5)
+    ax.add_feature(cfeature.LAND, facecolor='lightgray', alpha=0.2)
+    ax.gridlines(draw_labels=True, linestyle='--', alpha=0.5)
+
+media_plot = media_anual.plot(
+    ax=ax1,
+    transform=ccrs.PlateCarree(),
+    cmap='viridis',
+    cbar_kwargs={'label': 'Velocidad (m/s)', 'shrink': 0.8}
+)
+configurar_mapa(ax1)
+ax1.set_title("Velocidad media anual del viento a 100m", pad=15)
+
+maximo_plot = maximo_anual.plot(
+    ax=ax2,
+    transform=ccrs.PlateCarree(),
+    cmap='Reds',
+    cbar_kwargs={'label': 'Velocidad (m/s)', 'shrink': 0.8}
+)
+configurar_mapa(ax2)
+ax2.set_title("Velocidad máxima anual del viento a 100m", pad=15)
+
+plt.tight_layout()
+plt.show()
