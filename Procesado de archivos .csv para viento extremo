@@ -1,0 +1,101 @@
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
+import xarray as xr
+import numpy as np
+import pandas as pd
+from pathlib import Path
+from scipy.stats import gaussian_kde
+
+timestep = '1h'
+percentil_umbral = 99
+
+x_dur = np.linspace(0, 100, 100)
+x_sev = np.linspace(0, 100, 100)
+
+for year in range(2024, 1939, -1):
+    print(f"Procesando año {year}...")
+
+    nc_file = Path(f"F:/moduloydireccion/{year}modulo.nc")
+    output_csv = Path(f"F:/extremoscsv/extremos{year}.csv")
+
+    if not nc_file.exists():
+        print(f"Archivo no encontrado: {nc_file}")
+        continue
+
+    ds = xr.open_dataset(nc_file)
+    lats = ds['latitude'].values
+    lons = ds['longitude'].values
+    times = pd.to_datetime(ds['time'].values)
+
+    viento_var = None
+    for var in ds.data_vars:
+        if 'mod' in var.lower() or 'wind' in var.lower():
+            viento_var = var
+            break
+    if viento_var is None:
+        print(f"No se encontró variable de viento en {nc_file.name}")
+        continue
+
+    viento = ds[viento_var]
+    data_rows = []
+
+    for lat_idx in range(len(lats)):
+        lat = float(lats[lat_idx])
+
+        for lon_idx in range(len(lons)):
+            lon = float(lons[lon_idx])
+            serie = viento.isel(latitude=lat_idx, longitude=lon_idx).values
+            serie = pd.Series(serie, index=times)
+
+            if np.isnan(serie).all():
+                continue
+
+            threshold = np.percentile(serie.dropna(), percentil_umbral)
+            above_threshold = serie > threshold
+
+            df = pd.DataFrame({'wind': serie, 'above': above_threshold.astype(int)})
+            df['group'] = (df['above'].diff(1) != 0).cumsum()
+            extreme_groups = df[df['above'] == 1].groupby('group')
+
+            durations = []
+            severities = []
+
+            for _, group in extreme_groups:
+                duration = len(group)
+                severity = (group['wind'] - threshold).sum()
+                durations.append(duration)
+                severities.append(severity)
+
+            if len(durations) == 0:
+                continue
+
+            try:
+                dur_density = gaussian_kde(durations)
+                sev_density = gaussian_kde(severities)
+
+                dur_pdf = dur_density(x_dur)
+                sev_pdf = sev_density(x_sev)
+
+                row = {
+                    'lat': lat,
+                    'lon': lon,
+                    'num_extremos': len(durations),
+                    'duracion_media': np.mean(durations),
+                    'severidad_media': np.mean(severities),
+                    'dur_pdf': dur_pdf.tolist(),
+                    'sev_pdf': sev_pdf.tolist()
+                }
+                data_rows.append(row)
+
+            except Exception as e:
+                print(f"Error en nodo ({lat}, {lon}) del año {year}: {e}")
+                continue
+
+        print(f"Latitud {lat:.2f} del año {year} completada.")
+
+    df_resultado = pd.DataFrame(data_rows)
+    df_resultado.to_csv(output_csv, index=False)
+    print(f"CSV guardado: {output_csv}")
+
+print("Procesamiento finalizado para todos los años.")
