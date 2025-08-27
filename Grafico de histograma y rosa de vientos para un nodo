@@ -15,14 +15,14 @@ valores_vel = punto_vel.values.flatten()
 punto_dir = ds['wind_direction_100m'].sel(latitude=lat_punto, longitude=lon_punto, method='nearest')
 valores_dir = punto_dir.values.flatten()
 df_dir = pd.Series(valores_dir)
-df_dir = df_dir[df_dir.notna()]  # eliminar NaNs
+df_dir = df_dir[df_dir.notna()]  
 
 bins = np.arange(0, 361, 30)
 counts, _ = np.histogram(df_dir, bins=bins)
 
 angles = np.deg2rad(bins[:-1])
 angles = np.append(angles, angles[0])
-counts = np.append(counts, counts[0])  # cerrar círculo
+counts = np.append(counts, counts[0]) 
 
 fig = plt.figure(figsize=(14, 6))
 
@@ -38,11 +38,11 @@ ax2 = fig.add_subplot(1, 2, 2, polar=True)
 ax2.plot(angles, counts, 'r-', linewidth=2)
 ax2.fill(angles, counts, 'r', alpha=0.25)
 
-ax2.set_theta_zero_location('N')  # 0° en el norte
-ax2.set_theta_direction(-1)       # Sentido horario
+ax2.set_theta_zero_location('N')  
+ax2.set_theta_direction(-1)       
 ax2.set_title("Rosa de los vientos (50°N, 10°E)\nDirección de procedencia", pad=20)
 
-ax2.set_xticks(np.deg2rad(np.arange(0, 360, 30)))  # Marcas cada 30°
+ax2.set_xticks(np.deg2rad(np.arange(0, 360, 30)))  
 ax2.set_xticklabels(['0°', '30°', '60°', '90°', '120°', '150°', 
                     '180°', '210°', '240°', '270°', '300°', '330°'])
 
