@@ -5,8 +5,8 @@ import cartopy.feature as cfeature
 
 df = pd.read_csv("F:/sequiascsv/total_sequias.csv")
 
-umbral_duracion = df['duracion_media'].quantile(0.2)  
-umbral_severidad = df['severidad_media'].quantile(0.2)  
+umbral_duracion = df['duracion_media'].quantile(0.1)  
+umbral_severidad = df['severidad_media'].quantile(0.1)  
 
 df['optimo_eolico'] = (df['duracion_media'] <= umbral_duracion) & (df['severidad_media'] <= umbral_severidad)
 
