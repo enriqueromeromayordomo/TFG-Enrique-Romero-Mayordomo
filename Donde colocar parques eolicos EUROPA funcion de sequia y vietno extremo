@@ -1,0 +1,43 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+
+df_sequias = pd.read_csv("F:/sequiascsv/total_sequias.csv")
+df_vientos = pd.read_csv("F:/extremoscsv/total_extremos.csv")
+
+umbral_dur_sequia = df_sequias['duracion_media'].quantile(0.1)
+umbral_sev_sequia = df_sequias['severidad_media'].quantile(0.1)
+umbral_dur_viento = df_vientos['duracion_media'].quantile(0.1)
+umbral_sev_viento = df_vientos['severidad_media'].quantile(0.1)
+
+df_sequias['lat_lon'] = list(zip(df_sequias['lat'].round(2), df_sequias['lon'].round(2)))
+df_vientos['lat_lon'] = list(zip(df_vientos['lat'].round(2), df_vientos['lon'].round(2)))
+
+df_sequias['optimo_sequia'] = (df_sequias['duracion_media'] <= umbral_dur_sequia) & \
+                              (df_sequias['severidad_media'] <= umbral_sev_sequia)
+df_vientos['optimo_viento'] = (df_vientos['duracion_media'] <= umbral_dur_viento) & \
+                               (df_vientos['severidad_media'] <= umbral_sev_viento)
+
+set_sequia = set(df_sequias[df_sequias['optimo_sequia']]['lat_lon'])
+set_viento = set(df_vientos[df_vientos['optimo_viento']]['lat_lon'])
+zonas_optimas = list(set_sequia & set_viento)
+
+df_optimo = pd.DataFrame(zonas_optimas, columns=['lat', 'lon'])
+
+fig = plt.figure(figsize=(12, 8))
+ax = plt.axes(projection=ccrs.PlateCarree())
+ax.set_extent([-30, 50, 35, 75], crs=ccrs.PlateCarree())
+
+ax.add_feature(cfeature.LAND, facecolor='lightgray')
+ax.add_feature(cfeature.OCEAN, facecolor='lightblue')
+ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
+
+gl = ax.gridlines(draw_labels=True, linewidth=0.3, color='gray', alpha=0.5)
+gl.top_labels = False
+gl.right_labels = False
+
+ax.scatter(df_optimo['lon'], df_optimo['lat'], color='red', s=20)
+plt.title("Zonas Óptimas para Parques Eólicos (Sequías y Vientos Extremos Suaves)", fontsize=13)
+plt.show()
