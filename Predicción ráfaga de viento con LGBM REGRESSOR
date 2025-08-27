@@ -1,0 +1,139 @@
+import pandas as pd
+import numpy as np
+from lightgbm import LGBMRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix, classification_report
+
+climaticos_path = "F:/prediccion/var_clim_unificados.csv"
+rachas_path = "F:/prediccion/rachas_viento_40N_4E_fechas_corregidas.csv"
+
+df_clim = pd.read_csv(climaticos_path, parse_dates=['fecha'])
+df_rachas = pd.read_csv(rachas_path, parse_dates=['Fecha'])
+
+df = pd.merge(df_clim, df_rachas, left_on='fecha', right_on='Fecha')
+
+df = df.drop('Fecha', axis=1)
+df = df.sort_values('fecha').reset_index(drop=True)
+
+df['target'] = df['Racha_Viento_m/s'].shift(-1)
+
+df = df.dropna(subset=['target'])
+
+umbral = 5
+df['target_class'] = (df['target'] >= umbral).astype(int)
+
+X = df.drop(['fecha', 'Racha_Viento_m/s', 'target', 'target_class'], axis=1)
+y = df['target']
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, shuffle=False, random_state=42)
+
+model = LGBMRegressor(random_state=42, n_estimators=100, learning_rate=0.1)
+model.fit(X_train, y_train)
+
+y_pred = model.predict(X_test)
+
+mae = mean_absolute_error(y_test, y_pred)
+mse = mean_squared_error(y_test, y_pred)
+
+print("\nMétricas de Regresión:")
+print(f"MAE: {mae:.4f}")
+print(f"MSE: {mse:.4f}")
+
+y_test_class = (y_test >= umbral).astype(int)
+y_pred_class = (y_pred >= umbral).astype(int)
+
+conf_matrix = confusion_matrix(y_test_class, y_pred_class)
+class_report = classification_report(y_test_class, y_pred_class)
+
+print("\nMatriz de Confusión:")
+print(conf_matrix)
+print("\nReporte de Clasificación:")
+print(class_report)
+
+feature_importance = pd.DataFrame({
+    'feature': X.columns,
+    'importance': model.feature_importances_
+}).sort_values('importance', ascending=False)
+
+print("\nImportancia de características:")
+print(feature_importance.head(10)) 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import pandas as pd
+import numpy as np
+from lightgbm import LGBMRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix, classification_report
+
+climaticos_path = "F:/prediccion/var_clim_unificados_wind_gust.csv"
+rachas_path = "F:/prediccion/rachas_viento_40N_4E_fechas_corregidas.csv"
+
+df_clim = pd.read_csv(climaticos_path, parse_dates=['fecha'])
+df_rachas = pd.read_csv(rachas_path, parse_dates=['Fecha'])
+
+df = pd.merge(df_clim, df_rachas, left_on='fecha', right_on='Fecha')
+
+df = df.drop('Fecha', axis=1)
+df = df.sort_values('fecha').reset_index(drop=True)
+
+df['target'] = df['Racha_Viento_m/s'].shift(-1)
+
+df = df.dropna(subset=['target'])
+
+umbral = 5
+df['target_class'] = (df['target'] >= umbral).astype(int)
+
+X = df.drop(['fecha', 'Racha_Viento_m/s', 'target', 'target_class'], axis=1)
+y = df['target']
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, shuffle=False, random_state=42)
+
+model = LGBMRegressor(random_state=42, n_estimators=100, learning_rate=0.1)
+model.fit(X_train, y_train)
+
+y_pred = model.predict(X_test)
+
+mae = mean_absolute_error(y_test, y_pred)
+mse = mean_squared_error(y_test, y_pred)
+
+print("\nMétricas de Regresión:")
+print(f"MAE: {mae:.4f}")
+print(f"MSE: {mse:.4f}")
+
+y_test_class = (y_test >= umbral).astype(int)
+y_pred_class = (y_pred >= umbral).astype(int)
+
+conf_matrix = confusion_matrix(y_test_class, y_pred_class)
+class_report = classification_report(y_test_class, y_pred_class)
+
+print("\nMatriz de Confusión:")
+print(conf_matrix)
+print("\nReporte de Clasificación:")
+print(class_report)
+
+feature_importance = pd.DataFrame({
+    'feature': X.columns,
+    'importance': model.feature_importances_
+}).sort_values('importance', ascending=False)
+
+print("\nImportancia de características:")
+print(feature_importance.head(10)) 
