@@ -1,0 +1,34 @@
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+
+estaciones = ds['wind_speed_100m'].groupby('time.season').mean('time')
+
+orden_estaciones = ['DJF', 'MAM', 'JJA', 'SON']
+titulos = {
+    'DJF': 'Invierno (DJF)',
+    'MAM': 'Primavera (MAM)',
+    'JJA': 'Verano (JJA)',
+    'SON': 'Otoño (SON)'
+}
+
+fig, axes = plt.subplots(2, 2, figsize=(16, 12), subplot_kw={'projection': ccrs.PlateCarree()})
+axes = axes.flatten()  
+
+for i, estacion in enumerate(orden_estaciones):
+    ax = axes[i]
+    data = estaciones.sel(season=estacion)
+    
+    data.plot(ax=ax, transform=ccrs.PlateCarree(), cmap='coolwarm', add_colorbar=False)
+    
+    ax.coastlines()
+    ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+    ax.set_title(f"Velocidad media del viento a 100m - {titulos[estacion]}")
+
+cbar_ax = fig.add_axes([0.92, 0.25, 0.015, 0.5])  
+estaciones.sel(season='DJF').plot(
+    ax=axes[0], cmap='coolwarm', cbar_ax=cbar_ax, add_colorbar=True, add_labels=False
+)
+
+plt.tight_layout(rect=[0, 0, 0.9, 1])  
+plt.show()
