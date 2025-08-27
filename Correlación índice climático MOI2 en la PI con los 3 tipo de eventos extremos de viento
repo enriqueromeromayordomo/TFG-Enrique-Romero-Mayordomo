@@ -1,0 +1,1038 @@
+import pandas as pd
+import xarray as xr
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import pearsonr
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import os
+from matplotlib.colors import Normalize
+from IPython.display import display
+
+RUTA_WIND = "F:/windgust/data_daily_gust_1950_2012.nc"
+RUTA_MOI = "F:/variables climaticas/MOI/pasar_a_csv/MOI2.csv"
+RUTA_SALIDA = "F:/variables climaticas/MOI/correlacion_shift_MOI2.csv"
+RUTA_MAPA = "F:/variables climaticas/MOI/mapa_correlacion_MOI2_windgust.png"
+MAX_SHIFT = 120  
+
+def cargar_moi(ruta):
+    """Carga y prepara los datos MOI"""
+    df = pd.read_csv(ruta)
+    df['fecha'] = pd.to_datetime(df['date'])
+    return df.set_index('fecha')['value']
+
+def procesar_nodo(lat, lon, moi_series, ds_wind, max_shift):
+    """Procesa un nodo individual considerando correlaciones positivas y negativas"""
+    try:
+        nodo_wind = ds_wind["var29"].sel(
+            lat=lat, lon=lon, 
+            method="nearest",
+            tolerance=0.125
+        )
+        
+        fechas_wind = pd.to_datetime(
+            [f"{int(t)}"[:8] for t in nodo_wind.time.values], 
+            format='%Y%m%d'
+        )
+        
+        wind_series = pd.Series(
+            nodo_wind.values,
+            index=fechas_wind
+        ).dropna()
+        
+        common_dates = wind_series.index.intersection(moi_series.index)
+        wind_aligned = wind_series[common_dates]
+        moi_aligned = moi_series[common_dates]
+        
+        best_corr = 0
+        best_shift = 0
+        best_abs_corr = 0  
+        
+        correlaciones = []
+        shifts = range(0, max_shift + 1, 5)  
+        
+        for shift in shifts:
+            shifted_moi = moi_aligned.shift(-shift).dropna()
+            wind_valid = wind_aligned[shifted_moi.index]
+            
+            if len(wind_valid) > 10:
+                corr = pearsonr(shifted_moi, wind_valid)[0]
+                correlaciones.append(corr)
+                
+            
+                if abs(corr) > abs(best_abs_corr):
+                    best_abs_corr = corr
+                    best_corr = corr
+                    best_shift = shift
+            else:
+                correlaciones.append(np.nan)
+        
+        for shift in range(max(0, best_shift-4), min(max_shift, best_shift+5)):
+            shifted_moi = moi_aligned.shift(-shift).dropna()
+            wind_valid = wind_aligned[shifted_moi.index]
+            
+            if len(wind_valid) > 10:
+                corr = pearsonr(shifted_moi, wind_valid)[0]
+                if abs(corr) > abs(best_abs_corr):
+                    best_abs_corr = corr
+                    best_corr = corr
+                    best_shift = shift
+        
+        return {
+            'lat': float(lat),
+            'lon': float(lon),
+            'shift_optimo': int(best_shift),
+            'correlacion_max': float(best_corr),
+            'correlacion_abs_max': float(best_abs_corr),
+            'puntos_validos': int(len(common_dates)),
+            'correlaciones_shifts': correlaciones,
+            'shifts': list(shifts)
+        }
+        
+    except Exception as e:
+        print(f"Error en nodo ({lat:.2f}, {lon:.2f}): {str(e)}")
+        return {
+            'lat': float(lat),
+            'lon': float(lon),
+            'shift_optimo': np.nan,
+            'correlacion_max': np.nan,
+            'correlacion_abs_max': np.nan,
+            'puntos_validos': 0,
+            'correlaciones_shifts': [],
+            'shifts': []
+        }
+
+def generar_mapa_correlacion(df_resultados, ruta_salida=None, mostrar=False):
+    """Genera y guarda el mapa de correlaciones con estilo divergente"""
+    df_valido = df_resultados[df_resultados['puntos_validos'] > 0].copy()
+    
+    if df_valido.empty:
+        print("\nNo hay datos válidos para graficar.")
+        return
+    
+    print("\nGenerando mapa de correlaciones...")
+    plt.figure(figsize=(14, 10))
+    ax = plt.axes(projection=ccrs.PlateCarree())
+    
+    ax.add_feature(cfeature.LAND, facecolor='lightgray')
+    ax.add_feature(cfeature.OCEAN, facecolor='lightblue')
+    ax.add_feature(cfeature.COASTLINE)
+    ax.add_feature(cfeature.BORDERS, linestyle=':')
+    
+    corr_max = df_valido['correlacion_abs_max'].max()
+    sc = ax.scatter(
+        df_valido['lon'], 
+        df_valido['lat'], 
+        c=df_valido['correlacion_max'], 
+        cmap='coolwarm', 
+        vmin=-corr_max, 
+        vmax=corr_max,
+        s=30,
+        transform=ccrs.PlateCarree()
+    )
+    
+    cbar = plt.colorbar(sc, shrink=0.7)
+    cbar.set_label('Correlación MOI2-Wind Gust')
+    
+    ciudades = {
+        'Madrid': {'lat': 40.5, 'lon': -3.5},
+        'Barcelona': {'lat': 41.25, 'lon': 2.0},
+        'Sevilla': {'lat': 37.25, 'lon': -5.75},
+        'Cadiz': {'lat': 36.5, 'lon': -6.25},
+        'Mallorca': {'lat': 39.5, 'lon': 3.0}
+    }
+    
+    for ciudad, coords in ciudades.items():
+        ax.plot(coords['lon'], coords['lat'], 'ko', markersize=5, transform=ccrs.PlateCarree())
+        ax.text(coords['lon'] + 0.1, coords['lat'] + 0.1, ciudad, 
+                transform=ccrs.PlateCarree(), fontsize=10)
+    
+    plt.title("Correlaciones MOI2-Wind Gust (1950-2012)\n(Shifts de 0 a 120 días)")
+    plt.tight_layout()
+    
+    if ruta_salida:
+        plt.savefig(ruta_salida, dpi=300, bbox_inches='tight')
+        print(f"Mapa guardado en: {ruta_salida}")
+    
+    if mostrar:
+        plt.show()
+    else:
+        plt.close()
+
+def mostrar_estadisticas_detalladas(df_resultados):
+    """Muestra estadísticas detalladas de las correlaciones"""
+    df_valido = df_resultados[df_resultados['puntos_validos'] > 0].copy()
+    df_valido['abs_corr'] = df_valido['correlacion_max'].abs()
+    
+    if not df_valido.empty:
+        max_idx = df_valido['abs_corr'].idxmax()
+        max_row = df_valido.loc[max_idx]
+        
+        print("\n=== ESTADÍSTICAS DETALLADAS ===")
+        print(f"[CORRELACIÓN ABSOLUTA MÁXIMA]")
+        print(f"Valor: {max_row['correlacion_max']:.3f} (abs: {max_row['abs_corr']:.3f})")
+        print(f"Ubicación: ({max_row['lat']:.2f}°N, {max_row['lon']:.2f}°E)")
+        print(f"Shift óptimo: {max_row['shift_optimo']} días\n")
+        
+        positivas = df_valido[df_valido['correlacion_max'] > 0]
+        negativas = df_valido[df_valido['correlacion_max'] < 0]
+        
+        print("[CORRELACIONES POSITIVAS]")
+        if not positivas.empty:
+            max_pos = positivas['correlacion_max'].max()
+            min_pos = positivas['correlacion_max'].min()
+            max_pos_row = positivas[positivas['correlacion_max'] == max_pos].iloc[0]
+            min_pos_row = positivas[positivas['correlacion_max'] == min_pos].iloc[0]
+            
+            print(f"► Máxima positiva: {max_pos:.3f}")
+            print(f"  Ubicación: ({max_pos_row['lat']:.2f}°N, {max_pos_row['lon']:.2f}°E)")
+            print(f"  Shift óptimo: {max_pos_row['shift_optimo']} días\n")
+            
+            print(f"► Mínima positiva: {min_pos:.3f}")
+            print(f"  Ubicación: ({min_pos_row['lat']:.2f}°N, {min_pos_row['lon']:.2f}°E)")
+            print(f"  Shift óptimo: {min_pos_row['shift_optimo']} días\n")
+            
+            print(f"Total positivas: {len(positivas)} ({len(positivas)/len(df_valido)*100:.1f}%)\n")
+        else:
+            print("No hay correlaciones positivas significativas\n")
+        
+        print("[CORRELACIONES NEGATIVAS]")
+        if not negativas.empty:
+            max_neg = negativas['correlacion_max'].max() 
+            min_neg = negativas['correlacion_max'].min() 
+            max_neg_row = negativas[negativas['correlacion_max'] == max_neg].iloc[0]
+            min_neg_row = negativas[negativas['correlacion_max'] == min_neg].iloc[0]
+            
+            print(f"► Menos negativa (cercana a 0): {max_neg:.3f}")
+            print(f"  Ubicación: ({max_neg_row['lat']:.2f}°N, {max_neg_row['lon']:.2f}°E)")
+            print(f"  Shift óptimo: {max_neg_row['shift_optimo']} días\n")
+            
+            print(f"► Más negativa: {min_neg:.3f}")
+            print(f"  Ubicación: ({min_neg_row['lat']:.2f}°N, {min_neg_row['lon']:.2f}°E)")
+            print(f"  Shift óptimo: {min_neg_row['shift_optimo']} días\n")
+            
+            print(f"Total negativas: {len(negativas)} ({len(negativas)/len(df_valido)*100:.1f}%)")
+        else:
+            print("No hay correlaciones negativas significativas")
+    else:
+        print("\nNo se encontraron correlaciones significativas.")
+
+if __name__ == "__main__":
+    print("Iniciando análisis de correlación MOI2-Wind Gust (1950-2012)")
+    
+    try:
+        moi_series = cargar_moi(RUTA_MOI)
+        
+        ds_wind = xr.open_dataset(RUTA_WIND, decode_times=False)
+        
+        moi_series = moi_series[(moi_series.index >= '1950-01-01') & (moi_series.index <= '2012-12-31')]
+
+        lat_values = np.arange(
+            round(float(ds_wind.lat.min()), 2),
+            round(float(ds_wind.lat.max()), 2) + 0.25,
+            0.25
+        )
+        lon_values = np.arange(
+            round(float(ds_wind.lon.min()), 2),
+            round(float(ds_wind.lon.max()), 2) + 0.25,
+            0.25
+        )
+
+        print("\nIniciando procesamiento de todos los nodos...")
+        resultados = []
+        total_nodos = len(lat_values) * len(lon_values)
+        nodos_procesados = 0
+
+        for lat in lat_values:
+            for lon in lon_values:
+                nodos_procesados += 1
+                print(f"\rProgreso: {nodos_procesados}/{total_nodos} nodos | Lat: {lat:.2f} Lon: {lon:.2f}", end="")
+                resultados.append(procesar_nodo(lat, lon, moi_series, ds_wind, MAX_SHIFT))
+
+        df_resultados = pd.DataFrame(resultados)
+        df_resultados.to_csv(RUTA_SALIDA, index=False)
+        print(f"\n\nResultados guardados en: {RUTA_SALIDA}")
+
+        generar_mapa_correlacion(df_resultados, RUTA_MAPA, mostrar=True)
+        
+        mostrar_estadisticas_detalladas(df_resultados)
+        
+        print("\nProceso completado exitosamente!")
+    
+    except Exception as e:
+        print(f"\nError durante la ejecución: {str(e)}")
+        raise
+
+
+
+
+
+
+
+
+
+
+
+
+
+import pandas as pd
+import xarray as xr
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import pearsonr
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import os
+import glob
+import warnings
+import sys
+from IPython.display import display
+from matplotlib.colors import Normalize
+
+RUTA_MODULO = "F:/moduloydireccion/[0-9][0-9][0-9][0-9]modulo.nc"
+RUTA_MOI = "F:/variables climaticas/MOI/pasar_a_csv/MOI2.csv"
+RUTA_SALIDA = "F:/variables climaticas/MOI/correlacion_shift_MOI2_extremo_1950_2024.csv"
+RUTA_MAPA = "F:/variables climaticas/MOI/mapa_correlacion_MOI2_extremo.png"
+MAX_SHIFT = 120 
+PERCENTIL = 99  
+REGION_IBERICA = {'lat_min': 34, 'lat_max': 45, 'lon_min': -11, 'lon_max': 6}
+
+def mostrar_progreso(iterable, desc=None, total=None):
+    """Muestra una barra de progreso simple"""
+    if total is None and hasattr(iterable, '__len__'):
+        total = len(iterable)
+    
+    if desc:
+        print(desc)
+    
+    for i, item in enumerate(iterable):
+        yield item
+        if total:
+            porcentaje = (i + 1) / total * 100
+            sys.stdout.write(f"\rProgreso: {i+1}/{total} ({porcentaje:.1f}%)")
+            sys.stdout.flush()
+    
+    if total:
+        print()
+
+def cargar_moi(ruta):
+    """Carga y prepara los datos MOI2"""
+    print("\nCargando datos MOI2...")
+    df = pd.read_csv(ruta)
+    df['fecha'] = pd.to_datetime(df['date'])
+    return df[(df['fecha'] >= '1950-01-01') & (df['fecha'] <= '2024-12-31')].set_index('fecha')['value']
+
+def cargar_datos_viento(ruta_patron):
+    """Carga archivos de viento de forma eficiente en memoria"""
+    archivos = sorted(glob.glob(ruta_patron))
+    
+    if not archivos:
+        raise ValueError("No se encontraron archivos que coincidan con el patrón")
+    
+    print("\nCargando datos de viento (1950-2024) por bloques...")
+    
+    template = None
+    for archivo in archivos[:5]:  
+        try:
+            with xr.open_dataset(archivo) as ds:
+                time_var = next((v for v in ds.dims if v.lower() in ['time', 'valid_time', 'ftime']), None)
+                wind_var = next((v for v in ds.data_vars if 'wind' in v.lower()), None)
+                
+                if time_var and wind_var:
+                    template = ds[wind_var].isel({time_var: 0})
+                    break
+        except Exception as e:
+            continue
+    
+    if template is None:
+        raise ValueError("No se pudo determinar la estructura de los datos")
+    
+    lat_slice = slice(REGION_IBERICA['lat_max'], REGION_IBERICA['lat_min'])
+    lon_slice = slice(REGION_IBERICA['lon_min'], REGION_IBERICA['lon_max'])
+    
+    template = template.sel(latitude=lat_slice, longitude=lon_slice)
+    
+    datasets = []
+    for archivo in mostrar_progreso(archivos, "Procesando archivos de viento"):
+        try:
+            year = int(os.path.basename(archivo)[:4])
+            if 1950 <= year <= 2024:
+                with xr.open_dataset(archivo) as ds:
+                    time_var = next((v for v in ds.dims if v.lower() in ['time', 'valid_time', 'ftime']), None)
+                    wind_var = next((v for v in ds.data_vars if 'wind' in v.lower()), None)
+                    
+                    if time_var and wind_var:
+                        if time_var != 'time':
+                            ds = ds.rename({time_var: 'time'})
+                        
+                        ds = ds[[wind_var]].sel(latitude=lat_slice, longitude=lon_slice)
+                        
+                        ds[wind_var] = ds[wind_var].astype('float32')
+                        
+                        datasets.append(ds.load()) 
+        except Exception as e:
+            print(f"\nError procesando {os.path.basename(archivo)}: {str(e)}")
+            continue
+    
+    if not datasets:
+        raise ValueError("No se encontraron datos válidos después del procesamiento")
+    
+    print("\nConcatenando datos...")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        combined = xr.concat(datasets, dim='time', combine_attrs='override', coords='minimal')
+    
+    return combined
+
+def calcular_extremos_diarios(ds_viento):
+    """Calcula el percentil 99 diario para cada nodo de forma eficiente"""
+    print("\nCalculando extremos diarios...")
+    
+    wind_var = list(ds_viento.data_vars)[0]  
+    
+    print("Calculando máximo diario...")
+    daily_max = ds_viento[wind_var].resample(time='1D').max()
+    
+    print("Calculando percentil 99...")
+    percentil = daily_max.quantile(PERCENTIL/100, dim='time')
+    
+    print("Creando máscara de extremos...")
+    extremos = xr.where(daily_max >= percentil, 1, 0)
+    
+    return extremos
+
+def procesar_nodo(lat, lon, moi_series, extremos_daily, max_shift):
+    """Procesa un nodo individual considerando correlaciones positivas y negativas"""
+    try:
+        nodo_data = extremos_daily.sel(
+            latitude=lat,
+            longitude=lon,
+            method="nearest"
+        )
+        
+        extremos_series = pd.Series(
+            nodo_data.values,
+            index=pd.to_datetime(nodo_data.time.values),
+            dtype='int8'  
+        ).dropna()
+        
+        common_idx = moi_series.index.intersection(extremos_series.index)
+        if len(common_idx) < 365:
+            raise ValueError("Datos insuficientes")
+        
+        moi_aligned = moi_series[common_idx]
+        extremos_aligned = extremos_series[common_idx]
+        
+        best_corr = 0
+        best_shift = 0
+        best_abs_corr = 0  
+        
+        correlaciones = []
+        shifts = range(0, max_shift + 1, 5)  
+        
+        for shift in shifts:
+            shifted_moi = moi_aligned.shift(-shift).dropna()
+            extremos_valid = extremos_aligned[shifted_moi.index]
+            
+            if len(extremos_valid) > 365:
+                corr = pearsonr(shifted_moi, extremos_valid)[0]
+                correlaciones.append(corr)
+                
+                if abs(corr) > abs(best_abs_corr):
+                    best_abs_corr = corr
+                    best_corr = corr
+                    best_shift = shift
+            else:
+                correlaciones.append(np.nan)
+        
+        for shift in range(max(0, best_shift-4), min(max_shift, best_shift+5)):
+            shifted_moi = moi_aligned.shift(-shift).dropna()
+            extremos_valid = extremos_aligned[shifted_moi.index]
+            
+            if len(extremos_valid) > 365:
+                corr = pearsonr(shifted_moi, extremos_valid)[0]
+                if abs(corr) > abs(best_abs_corr):
+                    best_abs_corr = corr
+                    best_corr = corr
+                    best_shift = shift
+        
+        return {
+            'lat': float(lat),
+            'lon': float(lon),
+            'shift_optimo': int(best_shift),
+            'correlacion_max': float(best_corr),
+            'correlacion_abs_max': float(best_abs_corr),
+            'puntos_validos': int(len(common_idx)),
+            'correlaciones_shifts': correlaciones,
+            'shifts': list(shifts)
+        }
+        
+    except Exception as e:
+        print(f"Error en nodo ({lat:.2f}, {lon:.2f}): {str(e)}")
+        return {
+            'lat': float(lat),
+            'lon': float(lon),
+            'shift_optimo': np.nan,
+            'correlacion_max': np.nan,
+            'correlacion_abs_max': np.nan,
+            'puntos_validos': 0,
+            'correlaciones_shifts': [],
+            'shifts': []
+        }
+
+def generar_mapa_correlacion(df_resultados, ruta_salida=None, mostrar=False):
+    """Genera y guarda el mapa de correlaciones con estilo divergente"""
+    df_valido = df_resultados[df_resultados['puntos_validos'] > 0].copy()
+    
+    if df_valido.empty:
+        print("\nNo hay datos válidos para graficar.")
+        return
+    
+    print("\nGenerando mapa de correlaciones...")
+    plt.figure(figsize=(14, 10))
+    ax = plt.axes(projection=ccrs.PlateCarree())
+    
+    ax.add_feature(cfeature.LAND, facecolor='lightgray')
+    ax.add_feature(cfeature.OCEAN, facecolor='lightblue')
+    ax.add_feature(cfeature.COASTLINE)
+    ax.add_feature(cfeature.BORDERS, linestyle=':')
+    ax.set_extent([-11, 6, 34, 45])  
+    
+    corr_max = df_valido['correlacion_abs_max'].max()
+    sc = ax.scatter(
+        df_valido['lon'], 
+        df_valido['lat'], 
+        c=df_valido['correlacion_max'], 
+        cmap='coolwarm', 
+        vmin=-corr_max, 
+        vmax=corr_max,
+        s=30,
+        transform=ccrs.PlateCarree()
+    )
+    
+    cbar = plt.colorbar(sc, shrink=0.7)
+    cbar.set_label(f'Correlación MOI2-Viento Extremo (P{PERCENTIL})')
+    
+    ciudades = {
+        'Madrid': {'lat': 40.5, 'lon': -3.5},
+        'Barcelona': {'lat': 41.25, 'lon': 2.0},
+        'Sevilla': {'lat': 37.25, 'lon': -5.75},
+        'Cadiz': {'lat': 36.5, 'lon': -6.25},
+        'Mallorca': {'lat': 39.5, 'lon': 3.0}
+    }
+    
+    for ciudad, coords in ciudades.items():
+        ax.plot(coords['lon'], coords['lat'], 'ko', markersize=5, transform=ccrs.PlateCarree())
+        ax.text(coords['lon'] + 0.1, coords['lat'] + 0.1, ciudad, 
+                transform=ccrs.PlateCarree(), fontsize=10)
+    
+    plt.title(f"Correlaciones MOI2-Viento Extremo (P{PERCENTIL})\n(1950-2024)")
+    plt.tight_layout()
+    
+    if ruta_salida:
+        plt.savefig(ruta_salida, dpi=300, bbox_inches='tight')
+        print(f"Mapa guardado en: {ruta_salida}")
+    
+    if mostrar:
+        plt.show()
+    else:
+        plt.close()
+
+
+def mostrar_estadisticas_detalladas(df_resultados):
+    """Muestra estadísticas detalladas de las correlaciones"""
+    df_valido = df_resultados[df_resultados['puntos_validos'] > 0].copy()
+    df_valido['abs_corr'] = df_valido['correlacion_max'].abs()
+    
+    if not df_valido.empty:
+
+        max_idx = df_valido['abs_corr'].idxmax()
+        max_row = df_valido.loc[max_idx]
+        
+
+        print(f"[CORRELACIÓN ABSOLUTA MÁXIMA]")
+        print(f"Valor: {max_row['correlacion_max']:.3f} (abs: {max_row['abs_corr']:.3f})")
+        print(f"Ubicación: ({max_row['lat']:.2f}°N, {max_row['lon']:.2f}°E)")
+        print(f"Shift óptimo: {max_row['shift_optimo']} días\n")
+        
+        positivas = df_valido[df_valido['correlacion_max'] > 0]
+        negativas = df_valido[df_valido['correlacion_max'] < 0]
+        
+        print("[CORRELACIONES POSITIVAS]")
+        if not positivas.empty:
+            max_pos = positivas['correlacion_max'].max()
+            min_pos = positivas['correlacion_max'].min()
+            max_pos_row = positivas[positivas['correlacion_max'] == max_pos].iloc[0]
+            min_pos_row = positivas[positivas['correlacion_max'] == min_pos].iloc[0]
+            
+            print(f"► Máxima positiva: {max_pos:.3f}")
+            print(f"  Ubicación: ({max_pos_row['lat']:.2f}°N, {max_pos_row['lon']:.2f}°E)")
+            print(f"  Shift óptimo: {max_pos_row['shift_optimo']} días\n")
+            
+            print(f"► Mínima positiva: {min_pos:.3f}")
+            print(f"  Ubicación: ({min_pos_row['lat']:.2f}°N, {min_pos_row['lon']:.2f}°E)")
+            print(f"  Shift óptimo: {min_pos_row['shift_optimo']} días\n")
+            
+            print(f"Total positivas: {len(positivas)} ({len(positivas)/len(df_valido)*100:.1f}%)\n")
+        else:
+            print("No hay correlaciones positivas significativas\n")
+        
+        print("[CORRELACIONES NEGATIVAS]")
+        if not negativas.empty:
+            max_neg = negativas['correlacion_max'].max()  
+            min_neg = negativas['correlacion_max'].min() 
+            max_neg_row = negativas[negativas['correlacion_max'] == max_neg].iloc[0]
+            min_neg_row = negativas[negativas['correlacion_max'] == min_neg].iloc[0]
+            
+            print(f"► Menos negativa (cercana a 0): {max_neg:.3f}")
+            print(f"  Ubicación: ({max_neg_row['lat']:.2f}°N, {max_neg_row['lon']:.2f}°E)")
+            print(f"  Shift óptimo: {max_neg_row['shift_optimo']} días\n")
+            
+            print(f"► Más negativa: {min_neg:.3f}")
+            print(f"  Ubicación: ({min_neg_row['lat']:.2f}°N, {min_neg_row['lon']:.2f}°E)")
+            print(f"  Shift óptimo: {min_neg_row['shift_optimo']} días\n")
+            
+            print(f"Total negativas: {len(negativas)} ({len(negativas)/len(df_valido)*100:.1f}%)")
+        else:
+            print("No hay correlaciones negativas significativas")
+    else:
+        print("\nNo se encontraron correlaciones significativas.")
+
+
+if __name__ == "__main__":
+    print("Iniciando análisis de correlación MOI2-Viento Extremo (1950-2024)")
+    
+    try:
+        moi_series = cargar_moi(RUTA_MOI)
+        
+        ds_viento = cargar_datos_viento(RUTA_MODULO)
+        
+        extremos_daily = calcular_extremos_diarios(ds_viento)
+        del ds_viento  
+        
+        lat_values = np.linspace(
+            float(extremos_daily.latitude.min()),
+            float(extremos_daily.latitude.max()),
+            num=int((float(extremos_daily.latitude.max()) - float(extremos_daily.latitude.min())) / 0.25) + 1
+        )
+        lon_values = np.linspace(
+            float(extremos_daily.longitude.min()),
+            float(extremos_daily.longitude.max()),
+            num=int((float(extremos_daily.longitude.max()) - float(extremos_daily.longitude.min())) / 0.25) + 1
+        )
+        
+        print("\nProcesando nodos...")
+        resultados = []
+        total_nodos = len(lat_values) * len(lon_values)
+        procesados = 0
+        
+        for lat in lat_values:
+            for lon in lon_values:
+                resultados.append(procesar_nodo(lat, lon, moi_series, extremos_daily, MAX_SHIFT))
+                procesados += 1
+                porcentaje = procesados / total_nodos * 100
+                sys.stdout.write(f"\rProgreso: {procesados}/{total_nodos} ({porcentaje:.1f}%)")
+                sys.stdout.flush()
+        print()
+        
+        df_resultados = pd.DataFrame(resultados)
+        df_resultados.to_csv(RUTA_SALIDA, index=False)
+        print(f"\nResultados guardados en: {RUTA_SALIDA}")
+        
+        generar_mapa_correlacion(df_resultados, RUTA_MAPA, mostrar=True)
+        
+        mostrar_estadisticas_detalladas(df_resultados)
+        
+        print("\nProceso completado exitosamente!")
+    
+    except Exception as e:
+        print(f"\nError durante la ejecución: {str(e)}")
+        raise
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import pandas as pd
+import xarray as xr
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import pearsonr
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import os
+import glob
+import warnings
+import sys
+from IPython.display import display
+from matplotlib.colors import Normalize
+
+RUTA_MODULO = "F:/moduloydireccion/[0-9][0-9][0-9][0-9]modulo.nc"
+RUTA_MOI = "F:/variables climaticas/MOI/pasar_a_csv/MOI2.csv"
+RUTA_SALIDA = "F:/variables climaticas/MOI/correlacion_shift_MOI2_sequia_1950_2024.csv"
+RUTA_MAPA = "F:/variables climaticas/MOI/mapa_correlacion_MOI2_sequia.png"
+MAX_SHIFT = 120 
+PERCENTIL = 20   
+REGION_IBERICA = {'lat_min': 34, 'lat_max': 45, 'lon_min': -11, 'lon_max': 6}
+
+def mostrar_progreso(iterable, desc=None, total=None):
+    """Muestra una barra de progreso simple"""
+    if total is None and hasattr(iterable, '__len__'):
+        total = len(iterable)
+    
+    if desc:
+        print(desc)
+    
+    for i, item in enumerate(iterable):
+        yield item
+        if total:
+            porcentaje = (i + 1) / total * 100
+            sys.stdout.write(f"\rProgreso: {i+1}/{total} ({porcentaje:.1f}%)")
+            sys.stdout.flush()
+    
+    if total:
+        print()
+
+def cargar_moi(ruta):
+    """Carga y prepara los datos MOI2"""
+    print("\nCargando datos MOI2...")
+    df = pd.read_csv(ruta)
+    df['fecha'] = pd.to_datetime(df['date'])
+    return df[(df['fecha'] >= '1950-01-01') & (df['fecha'] <= '2024-12-31')].set_index('fecha')['value']
+
+def cargar_datos_viento(ruta_patron):
+    """Carga archivos de viento de forma eficiente en memoria"""
+    archivos = sorted(glob.glob(ruta_patron))
+    
+    if not archivos:
+        raise ValueError("No se encontraron archivos que coincidan con el patrón")
+    
+    print("\nCargando datos de viento (1950-2024) por bloques...")
+    
+    template = None
+    for archivo in archivos[:5]: 
+        try:
+            with xr.open_dataset(archivo) as ds:
+                time_var = next((v for v in ds.dims if v.lower() in ['time', 'valid_time', 'ftime']), None)
+                wind_var = next((v for v in ds.data_vars if 'wind' in v.lower()), None)
+                
+                if time_var and wind_var:
+                    template = ds[wind_var].isel({time_var: 0})
+                    break
+        except Exception as e:
+            continue
+    
+    if template is None:
+        raise ValueError("No se pudo determinar la estructura de los datos")
+    
+    lat_slice = slice(REGION_IBERICA['lat_max'], REGION_IBERICA['lat_min'])
+    lon_slice = slice(REGION_IBERICA['lon_min'], REGION_IBERICA['lon_max'])
+    
+    template = template.sel(latitude=lat_slice, longitude=lon_slice)
+    
+    datasets = []
+    for archivo in mostrar_progreso(archivos, "Procesando archivos de viento"):
+        try:
+            year = int(os.path.basename(archivo)[:4])
+            if 1950 <= year <= 2024:
+                with xr.open_dataset(archivo) as ds:
+                    time_var = next((v for v in ds.dims if v.lower() in ['time', 'valid_time', 'ftime']), None)
+                    wind_var = next((v for v in ds.data_vars if 'wind' in v.lower()), None)
+                    
+                    if time_var and wind_var:
+                        if time_var != 'time':
+                            ds = ds.rename({time_var: 'time'})
+                        
+                        ds = ds[[wind_var]].sel(latitude=lat_slice, longitude=lon_slice)
+                        
+                        ds[wind_var] = ds[wind_var].astype('float32')
+                        
+                        datasets.append(ds.load())  
+        except Exception as e:
+            print(f"\nError procesando {os.path.basename(archivo)}: {str(e)}")
+            continue
+    
+    if not datasets:
+        raise ValueError("No se encontraron datos válidos después del procesamiento")
+    
+    print("\nConcatenando datos...")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        combined = xr.concat(datasets, dim='time', combine_attrs='override', coords='minimal')
+    
+    return combined
+
+def calcular_sequias(ds_viento):
+    """Identifica días de sequía según percentil 20 (valores bajos de viento)"""
+    print("\nCalculando días de sequía...")
+    
+    wind_var = list(ds_viento.data_vars)[0]  
+    
+    print("Calculando mínimo diario...")
+    daily_min = ds_viento[wind_var].resample(time='1D').min()
+    
+    print("Calculando percentil 20...")
+    percentil = daily_min.quantile(PERCENTIL/100, dim='time')
+    
+    print("Creando máscara de sequía...")
+    sequias = xr.where(daily_min <= percentil, 1, 0)
+    
+    return sequias
+
+def procesar_nodo(lat, lon, moi_series, sequias_daily, max_shift):
+    """Procesa un nodo individual considerando correlaciones positivas y negativas"""
+    try:
+        nodo_data = sequias_daily.sel(
+            latitude=lat,
+            longitude=lon,
+            method="nearest"
+        )
+        
+        sequia_series = pd.Series(
+            nodo_data.values,
+            index=pd.to_datetime(nodo_data.time.values),
+            dtype='int8'  
+        ).dropna()
+        
+        common_idx = moi_series.index.intersection(sequia_series.index)
+        if len(common_idx) < 365:
+            raise ValueError("Datos insuficientes")
+        
+        moi_aligned = moi_series[common_idx]
+        sequia_aligned = sequia_series[common_idx]
+        
+        best_corr = 0
+        best_shift = 0
+        best_abs_corr = 0  
+        
+        correlaciones = []
+        shifts = range(0, max_shift + 1, 5)  
+        
+        for shift in shifts:
+            shifted_moi = moi_aligned.shift(-shift).dropna()
+            sequia_valid = sequia_aligned[shifted_moi.index]
+            
+            if len(sequia_valid) > 365:
+                corr = pearsonr(shifted_moi, sequia_valid)[0]
+                correlaciones.append(corr)
+                
+                if abs(corr) > abs(best_abs_corr):
+                    best_abs_corr = corr
+                    best_corr = corr
+                    best_shift = shift
+            else:
+                correlaciones.append(np.nan)
+        
+        for shift in range(max(0, best_shift-4), min(max_shift, best_shift+5)):
+            shifted_moi = moi_aligned.shift(-shift).dropna()
+            sequia_valid = sequia_aligned[shifted_moi.index]
+            
+            if len(sequia_valid) > 365:
+                corr = pearsonr(shifted_moi, sequia_valid)[0]
+                if abs(corr) > abs(best_abs_corr):
+                    best_abs_corr = corr
+                    best_corr = corr
+                    best_shift = shift
+        
+        return {
+            'lat': float(lat),
+            'lon': float(lon),
+            'shift_optimo': int(best_shift),
+            'correlacion_max': float(best_corr),
+            'correlacion_abs_max': float(best_abs_corr),
+            'puntos_validos': int(len(common_idx)),
+            'correlaciones_shifts': correlaciones,
+            'shifts': list(shifts)
+        }
+        
+    except Exception as e:
+        print(f"Error en nodo ({lat:.2f}, {lon:.2f}): {str(e)}")
+        return {
+            'lat': float(lat),
+            'lon': float(lon),
+            'shift_optimo': np.nan,
+            'correlacion_max': np.nan,
+            'correlacion_abs_max': np.nan,
+            'puntos_validos': 0,
+            'correlaciones_shifts': [],
+            'shifts': []
+        }
+
+def generar_mapa_correlacion(df_resultados, ruta_salida=None, mostrar=False):
+    """Genera y guarda el mapa de correlaciones con estilo divergente"""
+    df_valido = df_resultados[df_resultados['puntos_validos'] > 0].copy()
+    
+    if df_valido.empty:
+        print("\nNo hay datos válidos para graficar.")
+        return
+    
+    print("\nGenerando mapa de correlaciones...")
+    plt.figure(figsize=(14, 10))
+    ax = plt.axes(projection=ccrs.PlateCarree())
+    
+    ax.add_feature(cfeature.LAND, facecolor='lightgray')
+    ax.add_feature(cfeature.OCEAN, facecolor='lightblue')
+    ax.add_feature(cfeature.COASTLINE)
+    ax.add_feature(cfeature.BORDERS, linestyle=':')
+    ax.set_extent([-11, 6, 34, 45])  
+    
+    corr_max = df_valido['correlacion_abs_max'].max()
+    sc = ax.scatter(
+        df_valido['lon'], 
+        df_valido['lat'], 
+        c=df_valido['correlacion_max'], 
+        cmap='coolwarm', 
+        vmin=-corr_max, 
+        vmax=corr_max,
+        s=30,
+        transform=ccrs.PlateCarree()
+    )
+    
+    cbar = plt.colorbar(sc, shrink=0.7)
+    cbar.set_label('Correlación MOI2-Sequía')
+    
+    ciudades = {
+        'Madrid': {'lat': 40.5, 'lon': -3.5},
+        'Barcelona': {'lat': 41.25, 'lon': 2.0},
+        'Sevilla': {'lat': 37.25, 'lon': -5.75},
+        'Cadiz': {'lat': 36.5, 'lon': -6.25},
+        'Mallorca': {'lat': 39.5, 'lon': 3.0}
+    }
+    
+    for ciudad, coords in ciudades.items():
+        ax.plot(coords['lon'], coords['lat'], 'ko', markersize=5, transform=ccrs.PlateCarree())
+        ax.text(coords['lon'] + 0.1, coords['lat'] + 0.1, ciudad, 
+                transform=ccrs.PlateCarree(), fontsize=10)
+    
+    plt.title(f"Correlaciones MOI2-Sequía (P{PERCENTIL})\n(1950-2024)")
+    plt.tight_layout()
+    
+    if ruta_salida:
+        plt.savefig(ruta_salida, dpi=300, bbox_inches='tight')
+        print(f"Mapa guardado en: {ruta_salida}")
+    
+    if mostrar:
+        plt.show()
+    else:
+        plt.close()
+
+def mostrar_estadisticas_detalladas(df_resultados):
+    """Muestra estadísticas detalladas de las correlaciones"""
+    df_valido = df_resultados[df_resultados['puntos_validos'] > 0].copy()
+    df_valido['abs_corr'] = df_valido['correlacion_max'].abs()
+    
+    if not df_valido.empty:
+        max_idx = df_valido['abs_corr'].idxmax()
+        max_row = df_valido.loc[max_idx]
+        
+        print("\n=== ESTADÍSTICAS DETALLADAS ===")
+        print(f"[CORRELACIÓN ABSOLUTA MÁXIMA]")
+        print(f"Valor: {max_row['correlacion_max']:.3f} (abs: {max_row['abs_corr']:.3f})")
+        print(f"Ubicación: ({max_row['lat']:.2f}°N, {max_row['lon']:.2f}°E)")
+        print(f"Shift óptimo: {max_row['shift_optimo']} días\n")
+        
+        positivas = df_valido[df_valido['correlacion_max'] > 0]
+        negativas = df_valido[df_valido['correlacion_max'] < 0]
+        
+        print("[CORRELACIONES POSITIVAS]")
+        if not positivas.empty:
+            max_pos = positivas['correlacion_max'].max()
+            min_pos = positivas['correlacion_max'].min()
+            max_pos_row = positivas[positivas['correlacion_max'] == max_pos].iloc[0]
+            min_pos_row = positivas[positivas['correlacion_max'] == min_pos].iloc[0]
+            
+            print(f"► Máxima positiva: {max_pos:.3f}")
+            print(f"  Ubicación: ({max_pos_row['lat']:.2f}°N, {max_pos_row['lon']:.2f}°E)")
+            print(f"  Shift óptimo: {max_pos_row['shift_optimo']} días\n")
+            
+            print(f"► Mínima positiva: {min_pos:.3f}")
+            print(f"  Ubicación: ({min_pos_row['lat']:.2f}°N, {min_pos_row['lon']:.2f}°E)")
+            print(f"  Shift óptimo: {min_pos_row['shift_optimo']} días\n")
+            
+            print(f"Total positivas: {len(positivas)} ({len(positivas)/len(df_valido)*100:.1f}%)\n")
+        else:
+            print("No hay correlaciones positivas significativas\n")
+        
+        print("[CORRELACIONES NEGATIVAS]")
+        if not negativas.empty:
+            max_neg = negativas['correlacion_max'].max()  
+            min_neg = negativas['correlacion_max'].min()  
+            max_neg_row = negativas[negativas['correlacion_max'] == max_neg].iloc[0]
+            min_neg_row = negativas[negativas['correlacion_max'] == min_neg].iloc[0]
+            
+            print(f"► Menos negativa (cercana a 0): {max_neg:.3f}")
+            print(f"  Ubicación: ({max_neg_row['lat']:.2f}°N, {max_neg_row['lon']:.2f}°E)")
+            print(f"  Shift óptimo: {max_neg_row['shift_optimo']} días\n")
+            
+            print(f"► Más negativa: {min_neg:.3f}")
+            print(f"  Ubicación: ({min_neg_row['lat']:.2f}°N, {min_neg_row['lon']:.2f}°E)")
+            print(f"  Shift óptimo: {min_neg_row['shift_optimo']} días\n")
+            
+            print(f"Total negativas: {len(negativas)} ({len(negativas)/len(df_valido)*100:.1f}%)")
+        else:
+            print("No hay correlaciones negativas significativas")
+    else:
+        print("\nNo se encontraron correlaciones significativas.")
+
+
+if __name__ == "__main__":
+    print("Iniciando análisis de correlación MOI2-Sequía (1950-2024)")
+    
+    try:
+        moi_series = cargar_moi(RUTA_MOI)
+        
+        ds_viento = cargar_datos_viento(RUTA_MODULO)
+        
+        sequias_daily = calcular_sequias(ds_viento)
+        del ds_viento  
+        
+        lat_values = np.linspace(
+            float(sequias_daily.latitude.min()),
+            float(sequias_daily.latitude.max()),
+            num=int((float(sequias_daily.latitude.max()) - float(sequias_daily.latitude.min())) / 0.25) + 1
+        )
+        lon_values = np.linspace(
+            float(sequias_daily.longitude.min()),
+            float(sequias_daily.longitude.max()),
+            num=int((float(sequias_daily.longitude.max()) - float(sequias_daily.longitude.min())) / 0.25) + 1
+        )
+        
+        print("\nProcesando nodos...")
+        resultados = []
+        total_nodos = len(lat_values) * len(lon_values)
+        procesados = 0
+        
+        for lat in lat_values:
+            for lon in lon_values:
+                resultados.append(procesar_nodo(lat, lon, moi_series, sequias_daily, MAX_SHIFT))
+                procesados += 1
+                porcentaje = procesados / total_nodos * 100
+                sys.stdout.write(f"\rProgreso: {procesados}/{total_nodos} ({porcentaje:.1f}%)")
+                sys.stdout.flush()
+        print()
+        
+        df_resultados = pd.DataFrame(resultados)
+        df_resultados.to_csv(RUTA_SALIDA, index=False)
+        print(f"\nResultados guardados en: {RUTA_SALIDA}")
+        
+        generar_mapa_correlacion(df_resultados, RUTA_MAPA, mostrar=True)
+        
+        mostrar_estadisticas_detalladas(df_resultados)
+        
+        print("\nProceso completado exitosamente!")
+    
+    except Exception as e:
+        print(f"\nError durante la ejecución: {str(e)}")
+        raise
