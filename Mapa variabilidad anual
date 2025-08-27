@@ -1,0 +1,43 @@
+import xarray as xr
+import numpy as np
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+
+archivo = r"F:\moduloydireccion\2024modulo.nc"
+ds = xr.open_dataset(archivo)
+
+varianza = ds['wind_speed_100m'].groupby('time.month').var(dim='time')
+
+varianza_promedio = varianza.mean(dim='month')
+varianza_promedio.name = 'Varianza Promedio (m²/s²)'
+
+fig = plt.figure(figsize=(14, 8))
+ax = plt.axes(projection=ccrs.PlateCarree())
+
+img = varianza_promedio.plot(
+    ax=ax,
+    transform=ccrs.PlateCarree(),
+    cmap='viridis',  
+    cbar_kwargs={
+        'label': 'Varianza Promedio Mensual (m²/s²)',
+        'extend': 'both'
+    },
+    levels=20  
+)
+
+ax.coastlines(resolution='50m', linewidth=0.8)
+ax.add_feature(cfeature.BORDERS, linestyle=':', linewidth=0.5)
+ax.add_feature(cfeature.LAND, facecolor='lightgray', alpha=0.3)
+ax.add_feature(cfeature.OCEAN, facecolor='lightblue', alpha=0.3)
+
+ax.set_title("Variabilidad Anual de la Velocidad del Viento a 100m (2024)\n"
+             "Zonas con menor varianza indican vientos más constantes durante el año",
+             pad=20, fontsize=12)
+
+gl = ax.gridlines(draw_labels=True, linestyle='--', alpha=0.5)
+gl.top_labels = False
+gl.right_labels = False
+
+plt.tight_layout()
+plt.show()
