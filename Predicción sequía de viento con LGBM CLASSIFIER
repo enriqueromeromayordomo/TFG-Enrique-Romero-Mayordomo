@@ -1,0 +1,297 @@
+import pandas as pd
+import numpy as np
+from lightgbm import LGBMClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import f1_score, classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+ruta_datos = Path("F:/prediccion/var_clim_unificados.csv")
+ruta_eventos = Path("F:/prediccion/eventos_sequias_40_0.csv")
+ruta_salida = Path("F:/prediccion/resultados_prediccion_sequia")
+
+ruta_salida.mkdir(parents=True, exist_ok=True)
+
+def preparar_datos():
+    """Carga y prepara los datos para el modelo"""
+    print("="*50)
+    print("CARGANDO Y PREPARANDO DATOS")
+    print("="*50)
+    
+    try:
+        print("\nCargando datos climáticos...")
+        df_clima = pd.read_csv(ruta_datos, parse_dates=['fecha'])
+        print(f"Datos climáticos cargados. Registros: {len(df_clima)}")
+        
+        print("\nCargando datos de eventos...")
+        df_eventos = pd.read_csv(ruta_eventos, parse_dates=['fecha'])
+        print(f"Datos de eventos cargados. Registros: {len(df_eventos)}")
+        
+        df_eventos = df_eventos[(df_eventos['lat'] == 40.0) & (df_eventos['lon'] == -4.0)]
+        print(f"Eventos filtrados para 40.0N, -4.0W: {len(df_eventos)}")
+        
+        print("\nUniendo datasets...")
+        df_completo = pd.merge(df_clima, df_eventos[['fecha', 'evento_binario']], 
+                              on='fecha', how='inner')
+        print(f"Registros después de la unión: {len(df_completo)}")
+        
+        df_completo = df_completo.sort_values('fecha')
+        
+        print("\nPreparando variable objetivo...")
+        df_completo['target'] = df_completo['evento_binario'].shift(-1)
+        
+        df_completo = df_completo.iloc[:-1]
+        print(f"Registros finales: {len(df_completo)}")
+        
+        df_completo = df_completo.drop(['fecha', 'evento_binario'], axis=1)
+        
+        df_completo = df_completo.dropna()
+        print(f"Registros después de eliminar NaN: {len(df_completo)}")
+        
+        X = df_completo.drop('target', axis=1)
+        y = df_completo['target']
+        
+        print("\nBalance de clases:")
+        print(y.value_counts(normalize=True))
+        
+        return X, y
+    
+    except Exception as e:
+        print(f"\nError al preparar datos: {str(e)}")
+        return None, None
+
+def entrenar_modelo(X, y):
+    """Entrena y evalúa el modelo LGBMClassifier"""
+    print("\n" + "="*50)
+    print("ENTRENANDO MODELO LGBMClassifier")
+    print("="*50)
+    
+    try:
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.3, random_state=42, stratify=y
+        )
+        
+        print(f"\nDatos de entrenamiento: {X_train.shape[0]} registros")
+        print(f"Datos de prueba: {X_test.shape[0]} registros")
+        
+        print("\nConfigurando modelo LGBMClassifier...")
+        model = LGBMClassifier(
+            objective='binary',
+            n_estimators=500,
+            learning_rate=0.05,
+            max_depth=7,
+            num_leaves=31,
+            class_weight='balanced',
+            random_state=42,
+            n_jobs=-1
+        )
+        
+        print("\nEntrenando modelo...")
+        model.fit(X_train, y_train)
+        
+        print("\nEvaluando modelo...")
+        y_pred = model.predict(X_test)
+        
+        f1 = f1_score(y_test, y_pred)
+        print("\n" + "="*50)
+        print("RESULTADOS DE LA PREDICCIÓN")
+        print("="*50)
+        print(f"F1-Score: {f1:.4f}")
+        
+        print("\nReporte de clasificación:")
+        print(classification_report(y_test, y_pred))
+        
+        print("\nMatriz de confusión:")
+        print(confusion_matrix(y_test, y_pred))
+        
+        print("\nImportancia de características:")
+        importancia = pd.DataFrame({
+            'feature': X.columns,
+            'importance': model.feature_importances_
+        }).sort_values('importance', ascending=False)
+        
+        print(importancia.head(10))
+        
+        plt.figure(figsize=(10, 6))
+        importancia.head(20).sort_values('importance').plot.barh(
+            x='feature', y='importance', color='steelblue'
+        )
+        plt.title('Top 20 Características Más Importantes')
+        plt.xlabel('Importancia')
+        plt.tight_layout()
+        plt.savefig(ruta_salida / "importancia_caracteristicas.png")
+        plt.close()
+        print(f"\nGráfico de importancia guardado en: {ruta_salida / 'importancia_caracteristicas.png'}")
+        
+        return model, f1
+    
+    except Exception as e:
+        print(f"\nError durante el entrenamiento: {str(e)}")
+        return None, None
+
+if __name__ == "__main__":
+    X, y = preparar_datos()
+    
+    if X is not None and y is not None:
+        model, f1_score = entrenar_modelo(X, y)
+        
+        if model is not None:
+            print("\n" + "="*50)
+            print("PROCESO COMPLETADO")
+            print("="*50)
+            print(f"F1-Score obtenido: {f1_score:.4f}")
+            print(f"Resultados guardados en: {ruta_salida}")
+
+
+
+
+
+
+
+
+
+
+
+import pandas as pd
+import numpy as np
+from lightgbm import LGBMClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import f1_score, classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+ruta_datos = Path("F:/prediccion/var_clim_unificados_sequias.csv")
+ruta_eventos = Path("F:/prediccion/eventos_sequias_40_0.csv")
+ruta_salida = Path("F:/prediccion/resultados_prediccion_sequia_CON_INDICE y shift")
+
+ruta_salida.mkdir(parents=True, exist_ok=True)
+
+def preparar_datos():
+    """Carga y prepara los datos para el modelo"""
+    print("="*50)
+    print("CARGANDO Y PREPARANDO DATOS")
+    print("="*50)
+    
+    try:
+        print("\nCargando datos climáticos...")
+        df_clima = pd.read_csv(ruta_datos, parse_dates=['fecha'])
+        print(f"Datos climáticos cargados. Registros: {len(df_clima)}")
+        
+        print("\nCargando datos de eventos...")
+        df_eventos = pd.read_csv(ruta_eventos, parse_dates=['fecha'])
+        print(f"Datos de eventos cargados. Registros: {len(df_eventos)}")
+        
+        df_eventos = df_eventos[(df_eventos['lat'] == 40.0) & (df_eventos['lon'] == -4.0)]
+        print(f"Eventos filtrados para 40.0N, -4.0W: {len(df_eventos)}")
+        
+        print("\nUniendo datasets...")
+        df_completo = pd.merge(df_clima, df_eventos[['fecha', 'evento_binario']], 
+                              on='fecha', how='inner')
+        print(f"Registros después de la unión: {len(df_completo)}")
+        
+        df_completo = df_completo.sort_values('fecha')
+        
+        print("\nPreparando variable objetivo...")
+        df_completo['target'] = df_completo['evento_binario'].shift(-1)
+        
+        df_completo = df_completo.iloc[:-1]
+        print(f"Registros finales: {len(df_completo)}")
+        
+        df_completo = df_completo.drop(['fecha', 'evento_binario'], axis=1)
+        
+        df_completo = df_completo.dropna()
+        print(f"Registros después de eliminar NaN: {len(df_completo)}")
+        
+        X = df_completo.drop('target', axis=1)
+        y = df_completo['target']
+        
+        print("\nBalance de clases:")
+        print(y.value_counts(normalize=True))
+        
+        return X, y
+    
+    except Exception as e:
+        print(f"\nError al preparar datos: {str(e)}")
+        return None, None
+
+def entrenar_modelo(X, y):
+    """Entrena y evalúa el modelo LGBMClassifier"""
+    print("\n" + "="*50)
+    print("ENTRENANDO MODELO LGBMClassifier")
+    print("="*50)
+    
+    try:
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.3, random_state=42, stratify=y
+        )
+        
+        print(f"\nDatos de entrenamiento: {X_train.shape[0]} registros")
+        print(f"Datos de prueba: {X_test.shape[0]} registros")
+        
+        print("\nConfigurando modelo LGBMClassifier...")
+        model = LGBMClassifier(
+            objective='binary',
+            n_estimators=500,
+            learning_rate=0.05,
+            max_depth=7,
+            num_leaves=31,
+            class_weight='balanced',
+            random_state=42,
+            n_jobs=-1
+        )
+        
+        print("\nEntrenando modelo...")
+        model.fit(X_train, y_train)
+        
+        print("\nEvaluando modelo...")
+        y_pred = model.predict(X_test)
+        
+        f1 = f1_score(y_test, y_pred)
+        print("\n" + "="*50)
+        print("RESULTADOS DE LA PREDICCIÓN")
+        print("="*50)
+        print(f"F1-Score: {f1:.4f}")
+        
+        print("\nReporte de clasificación:")
+        print(classification_report(y_test, y_pred))
+        
+        print("\nMatriz de confusión:")
+        print(confusion_matrix(y_test, y_pred))
+        
+        print("\nImportancia de características:")
+        importancia = pd.DataFrame({
+            'feature': X.columns,
+            'importance': model.feature_importances_
+        }).sort_values('importance', ascending=False)
+        
+        print(importancia.head(10))
+        
+        plt.figure(figsize=(10, 6))
+        importancia.head(20).sort_values('importance').plot.barh(
+            x='feature', y='importance', color='steelblue'
+        )
+        plt.title('Top 20 Características Más Importantes')
+        plt.xlabel('Importancia')
+        plt.tight_layout()
+        plt.savefig(ruta_salida / "importancia_caracteristicas.png")
+        plt.close()
+        print(f"\nGráfico de importancia guardado en: {ruta_salida / 'importancia_caracteristicas.png'}")
+        
+        return model, f1
+    
+    except Exception as e:
+        print(f"\nError durante el entrenamiento: {str(e)}")
+        return None, None
+
+if __name__ == "__main__":
+    X, y = preparar_datos()
+    
+    if X is not None and y is not None:
+        model, f1_score = entrenar_modelo(X, y)
+        
+        if model is not None:
+            print("\n" + "="*50)
+            print("PROCESO COMPLETADO")
+            print("="*50)
+            print(f"F1-Score obtenido: {f1_score:.4f}")
+            print(f"Resultados guardados en: {ruta_salida}")
