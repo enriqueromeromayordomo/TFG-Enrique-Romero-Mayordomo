@@ -1,0 +1,60 @@
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib.colors as mcolors
+import numpy as np
+from pathlib import Path
+import pandas as pd
+
+ruta_guardado = Path("Escritorio")
+ruta_guardado.mkdir(parents=True, exist_ok=True)
+
+
+
+print("Generando mapa de idoneidad eólica...")
+
+fig = plt.figure(figsize=(12, 10))
+ax = plt.axes(projection=ccrs.PlateCarree())
+ax.set_extent([-10, 4, 35.5, 44.5], crs=ccrs.PlateCarree())
+
+ax.add_feature(cfeature.LAND, facecolor='lightgray')
+ax.add_feature(cfeature.OCEAN, facecolor='lightblue')
+ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
+
+gl = ax.gridlines(draw_labels=True, linewidth=0.3, color='gray', alpha=0.5)
+gl.top_labels = False
+gl.right_labels = False
+
+cmap = mcolors.LinearSegmentedColormap.from_list(
+    'eolico', ['darkgreen', 'limegreen', 'yellow', 'orange', 'red']
+)
+norm = mcolors.BoundaryNorm(np.arange(6) + 0.5, cmap.N)
+
+sc = ax.scatter(
+    df['lon'], df['lat'], 
+    c=df['clasificacion'], 
+    cmap=cmap, norm=norm,
+    s=30, alpha=0.7, edgecolor='k', linewidth=0.2
+)
+
+cbar = plt.colorbar(sc, ax=ax, ticks=[1, 2, 3, 4, 5])
+cbar.set_label('Idoneidad para parques eólicos\n(1 = mejor, 5 = peor)')
+cbar.ax.invert_yaxis()
+
+mejores = df[df['clasificacion'] == 1]
+ax.scatter(
+    mejores['lon'], mejores['lat'],
+    c='lime', s=50, edgecolor='darkgreen', linewidth=1,
+    label='Zonas óptimas'
+)
+
+plt.legend(loc='upper right')
+plt.title('Zonas Óptimas para Parques Eólicos en la Península Ibérica\nBasado en Severidad y Duración de Rachas de Viento', 
+          fontsize=14, pad=20)
+
+output_path = ruta_guardado / "optimos_eolicos_rachas.png"
+plt.savefig(output_path, dpi=300, bbox_inches='tight')
+plt.show()
+
+print(f"Mapa guardado en: {output_path}")
