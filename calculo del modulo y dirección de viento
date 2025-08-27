@@ -1,0 +1,38 @@
+import xarray as xr
+import numpy as np
+import os
+
+nc_input_file = r"E:\nc\2024.nc"  
+nc_output_file = r"E:\moduloydireccion\2024modulo.nc"  
+
+os.makedirs(r"E:\moduloydireccion", exist_ok=True)
+
+ds = xr.open_dataset(nc_input_file)
+
+u = ds["u100"]
+v = ds["v100"]
+
+wind_speed = np.sqrt(u**2 + v**2).data  
+
+wind_direction = np.arctan2(-u, -v) * (180 / np.pi)
+wind_direction = (wind_direction + 360) % 360  
+wind_direction = wind_direction.data  
+
+ds_new = xr.Dataset(
+    {
+        "wind_speed_100m": (("time", "latitude", "longitude"), wind_speed),
+        "wind_direction_100m": (("time", "latitude", "longitude"), wind_direction),
+    },
+    coords={
+        "time": ds["time"],
+        "latitude": ds["latitude"],
+        "longitude": ds["longitude"],
+    }
+)
+
+ds_new.to_netcdf(nc_output_file)
+
+ds.close()
+ds_new.close()
+
+print(f"Archivo guardado en: {nc_output_file}")
