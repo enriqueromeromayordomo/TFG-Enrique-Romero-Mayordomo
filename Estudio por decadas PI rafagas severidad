@@ -1,0 +1,141 @@
+import os
+import numpy as np
+import pandas as pd
+import xarray as xr
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.cluster import KMeans
+from pathlib import Path
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib.colors as mcolors
+
+ruta_nc = r"F:\windgust\data_daily_gust_1950_2022.nc"
+ruta_salida = Path(r"F:\visual studio code\comparaciones_especificas_clusters_iberica")
+ruta_salida.mkdir(parents=True, exist_ok=True)
+
+ds = xr.open_dataset(ruta_nc)
+var_name = list(ds.data_vars)[0]
+da = ds[var_name]
+
+fechas = pd.to_datetime(da['time'].values.astype(int).astype(str), format="%Y%m%d", errors='coerce')
+da['time'] = fechas
+
+decadas = [(1950, 1959), (1960, 1969), (1970, 1979),
+           (1980, 1989), (1990, 1999), (2000, 2009), (2010, 2022)]
+
+def calcular_area_km2(latitudes, resol=0.25):
+    R = 6371  
+    dlat = np.radians(resol)
+    dlon = np.radians(resol)
+    areas = (R**2) * dlat * dlon * np.cos(np.radians(latitudes))
+    return areas
+
+historico_clusters = []
+colores = sns.color_palette("tab10", 5) 
+
+for inicio, fin in decadas:
+    print(f"\nProcesando década {inicio}-{fin}...")
+    da_decada = da.sel(time=slice(f"{inicio}-01-01", f"{fin}-12-31"))
+
+    p95 = da_decada.quantile(0.95, dim='time')
+
+    lats, lons = np.meshgrid(p95['lat'], p95['lon'], indexing='ij')
+    df = pd.DataFrame({
+        'lat': lats.ravel(),
+        'lon': lons.ravel(),
+        'severidad': p95.values.ravel()
+    }).dropna()
+
+    kmeans_sev = KMeans(n_clusters=5, random_state=0, n_init='auto')
+    df['cluster_raw'] = kmeans_sev.fit_predict(df[['severidad']])
+    orden = df.groupby('cluster_raw')['severidad'].mean().sort_values().index
+    mapa = {v: i for i, v in enumerate(orden)}
+    df['cluster'] = df['cluster_raw'].map(mapa)
+
+    df['area_km2'] = calcular_area_km2(df['lat'])
+    resumen = df.groupby('cluster').agg(
+        area_total=('area_km2', 'sum'),
+        media_severidad=('severidad', 'mean')
+    ).reset_index()
+    resumen['decada'] = f"{inicio}-{fin}"
+    historico_clusters.append(resumen)
+
+    fig = plt.figure(figsize=(10, 10))
+    ax = plt.subplot(2, 1, 1, projection=ccrs.PlateCarree())
+    ax.set_extent([-11, 6, 34, 45], crs=ccrs.PlateCarree())
+    ax.add_feature(cfeature.LAND, facecolor='lightgray')
+    ax.add_feature(cfeature.OCEAN, facecolor='lightblue')
+    ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+    ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
+    gl = ax.gridlines(draw_labels=True, linewidth=0.3, color='gray', alpha=0.5)
+    gl.top_labels = gl.right_labels = False
+
+    cmap = mcolors.ListedColormap(colores)
+    bounds = np.arange(6) - 0.5
+    norm = mcolors.BoundaryNorm(bounds, cmap.N)
+
+    scatter = ax.scatter(df['lon'], df['lat'], c=df['cluster'],
+                         cmap=cmap, norm=norm, s=25)
+    cbar = plt.colorbar(scatter, ax=ax, ticks=np.arange(5), boundaries=bounds)
+    cbar.set_label("Cluster por Severidad")
+
+    ax.set_title(f"Mapa Clusters de Severidad {inicio}-{fin}")
+
+    ax2 = plt.subplot(2, 1, 2)
+    ax2.axis('off')
+    for i, row in resumen.iterrows():
+        ax2.text(0, 1 - i * 0.15,
+                 f"Cluster {int(row.cluster)}: {row.area_total:.0f} km², Media: {row.media_severidad:.2f}",
+                 fontsize=11, color=colores[i])
+
+    nombre = f"mapa_severidad_{inicio}_{fin}.png"
+    plt.savefig(ruta_salida / nombre, dpi=300, bbox_inches='tight')
+    plt.show()
+
+    plt.figure(figsize=(8, 6))
+    for c in range(5):
+        sns.kdeplot(df[df['cluster'] == c]['severidad'], label=f'Cluster {c}', color=colores[c])
+    plt.xlabel("Severidad")
+    plt.ylabel("Densidad")
+    plt.title(f"Distribución de Severidad por Cluster ({inicio}-{fin})")
+    plt.legend()
+    nombre = f"density_severidad_{inicio}_{fin}.png"
+    plt.savefig(ruta_salida / nombre, dpi=300, bbox_inches='tight')
+    plt.show()
+
+hist_df = pd.concat(historico_clusters)
+hist_df.to_csv(ruta_salida / "historico_clusters_severidad.csv", index=False)
+
+fig, axes = plt.subplots(2, 1, figsize=(10, 10), sharex=True)
+
+sns.lineplot(data=hist_df, x='decada', y='area_total', hue='cluster', marker="o", palette=colores, ax=axes[0])
+axes[0].set_title("Evolución del Tamaño de los Clusters (km²)")
+axes[0].set_ylabel("Área (km²)")
+
+sns.lineplot(data=hist_df, x='decada', y='media_severidad', hue='cluster', marker="o", palette=colores, ax=axes[1])
+axes[1].set_title("Evolución de la Severidad Media por Cluster")
+axes[1].set_ylabel("Severidad")
+
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.savefig(ruta_salida / "evolucion_clusters_opcionA.png", dpi=300)
+plt.show()
+
+pivot_area = hist_df.pivot(index="decada", columns="cluster", values="area_total")
+pivot_area.plot(kind="bar", stacked=True, color=colores, figsize=(10, 6))
+plt.title("Tamaño de Clusters por Década (Barras Apiladas)")
+plt.ylabel("Área total (km²)")
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.savefig(ruta_salida / "evolucion_clusters_opcionB_barras.png", dpi=300)
+plt.show()
+
+pivot_sev = hist_df.pivot(index="decada", columns="cluster", values="media_severidad")
+pivot_sev.plot(figsize=(10, 6), marker='o', color=colores)
+plt.title("Evolución Suavizada de Severidad Media por Cluster")
+plt.ylabel("Severidad")
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.savefig(ruta_salida / "evolucion_clusters_opcionC_suavizada.png", dpi=300)
+plt.show()
