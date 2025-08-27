@@ -1,0 +1,153 @@
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
+import xarray as xr
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+from pathlib import Path
+
+nc_file = r"F:\\moduloydireccion\\2024modulo.nc"
+timestep = '1h'
+extreme_percentile = 99
+min_extreme_hours = 1
+save_plots = False
+
+hours_per_step = pd.Timedelta(timestep).total_seconds() / 3600
+min_steps = int(min_extreme_hours / hours_per_step)
+
+ds = xr.open_dataset(nc_file)
+lats = ds['latitude'].values
+lons = ds['longitude'].values
+times = pd.to_datetime(ds['time'].values)
+
+
+viento_var = None
+for var in ds.data_vars:
+    if 'mod' in var.lower() or 'wind' in var.lower():
+        viento_var = var
+        break
+if viento_var is None:
+    raise KeyError("No se encontró la variable del módulo de viento en el NetCDF.")
+
+viento = ds[viento_var]
+
+for lat_idx in range(len(lats)):
+    for lon_idx in range(len(lons)):
+
+        lat = round(float(lats[lat_idx]), 2)
+        lon = round(float(lons[lon_idx]), 2)
+
+        try:
+            serie = viento.isel(latitude=lat_idx, longitude=lon_idx).values
+            serie = pd.Series(serie, index=times)
+
+            if np.isnan(serie).all():
+                continue
+
+            serie_resampled = serie.resample(timestep).mean()
+            serie_valid = serie_resampled.dropna()
+
+            if len(serie_valid) < 10 or serie_valid.nunique() < 2:
+                print(f"Nodo ({lat:.2f}°, {lon:.2f}°): No se puede calcular el percentil ({extreme_percentile}) por falta de datos válidos. Nodo omitido.\n")
+                continue
+
+            threshold = np.percentile(serie_valid, extreme_percentile)
+            above_threshold = serie_resampled > threshold
+
+            df = pd.DataFrame({'wind': serie_resampled, 'above': above_threshold.astype(int)})
+            df['group'] = (df['above'].diff(1) != 0).cumsum()
+            extreme_groups = df[df['above'] == 1].groupby('group')
+
+            extreme_events = {}
+            for group_id, group in extreme_groups:
+                duration = len(group)
+                if duration >= min_steps:
+                    severity = (group['wind'] - threshold).sum()
+                    mean_wind = group['wind'].mean()
+                    max_wind = group['wind'].max()
+                    extreme_events[group_id] = {
+                        'start': group.index[0],
+                        'end': group.index[-1],
+                        'duration_steps': duration,
+                        'duration_hours': duration * hours_per_step,
+                        'severity': severity,
+                        'mean_wind': mean_wind,
+                        'max_wind': max_wind,
+                        'data': group
+                    }
+
+            num_events = len(extreme_events)
+
+            print(f"Nodo ({lat:.2f}°, {lon:.2f}°):")
+            if num_events == 0:
+                print("  No se han detectado eventos de viento extremo.\n")
+                continue
+
+            print(f"  Umbral de viento extremo (percentil {extreme_percentile}): {threshold:.2f} m/s")
+            print(f"  Se han detectado {num_events} evento(s) de viento extremo:")
+            duraciones = []
+            severidades = []
+
+            for i, event in enumerate(extreme_events.values(), 1):
+                dur = event['duration_hours']
+                sev = event['severity']
+                mean_w = event['mean_wind']
+                max_w = event['max_wind']
+
+                duraciones.append(dur)
+                severidades.append(sev)
+
+                print(f"    Evento #{i}: {event['start']} → {event['end']}, "
+                      f"Duración = {dur:.0f} horas "
+                      f"({event['duration_steps']} pasos), "
+                      f"Severidad = {sev:.2f}, "
+                      f"Media = {mean_w:.2f} m/s, Máxima = {max_w:.2f} m/s")
+            print()
+
+            plt.figure(figsize=(12, 4))
+            plt.plot(df.index, df['wind'], label='Velocidad del viento', color='navy')
+            plt.axhline(y=threshold, color='red', linestyle='--', label=f'Percentil {extreme_percentile}')
+
+            for i, event in enumerate(extreme_events.values(), 1):
+                plt.fill_between(event['data'].index, threshold, event['data']['wind'],
+                                 where=event['data']['wind'] > threshold,
+                                 interpolate=True, color='orange', alpha=0.5,
+                                 label="Evento extremo" if i == 1 else "")
+
+            plt.title(f"Viento extremo en nodo ({lat:.2f}°, {lon:.2f}°)")
+            plt.xlabel("Tiempo")
+            plt.ylabel("Velocidad del viento")
+            plt.legend()
+            plt.tight_layout()
+
+            if save_plots:
+                Path("eventos_extremos").mkdir(exist_ok=True)
+                fname = f"eventos_extremos/extremo_{lat:.2f}_{lon:.2f}.png"
+                plt.savefig(fname)
+                plt.close()
+            else:
+                plt.show()
+
+            plt.figure(figsize=(10, 4))
+            plt.subplot(1, 2, 1)
+            plt.hist(duraciones, bins=10, color='deepskyblue', edgecolor='black')
+            plt.title("Histograma de Duraciones (horas)")
+            plt.xlabel("Duración (h)")
+            plt.ylabel("Frecuencia")
+
+            plt.subplot(1, 2, 2)
+            plt.hist(severidades, bins=10, color='orangered', edgecolor='black')
+            plt.title("Histograma de Severidades")
+            plt.xlabel("Severidad")
+            plt.ylabel("Frecuencia")
+
+            plt.suptitle(f"Histograma - Nodo ({lat:.2f}°, {lon:.2f}°)")
+            plt.tight_layout()
+            plt.show()
+
+        except Exception as e:
+            print(f"Error procesando nodo ({lat:.2f}°, {lon:.2f}°): {e}\n")
+            continue
+
+print("\n✔ Procesamiento completado para todos los nodos.")
