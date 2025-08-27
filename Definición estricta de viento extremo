@@ -150,4 +150,4 @@ for lat_idx in range(len(lats)):
             print(f"Error procesando nodo ({lat:.2f}°, {lon:.2f}°): {e}\n")
             continue
 
-print("\n✔ Procesamiento completado para todos los nodos.")
+print("\n Procesamiento completado para todos los nodos.")
