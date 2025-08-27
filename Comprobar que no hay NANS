@@ -1,0 +1,25 @@
+import xarray as xr
+import numpy as np
+import os
+
+carpeta = r"E:\moduloydireccion"
+
+years = range(1940, 1958)
+
+for year in years:
+    archivo = os.path.join(carpeta, f"{year}modulo.nc")
+    
+    if os.path.exists(archivo):
+        try:
+            ds = xr.open_dataset(archivo, engine="netcdf4")
+
+            nan_speed = np.isnan(ds["wind_speed_100m"]).sum().item()
+            nan_dir = np.isnan(ds["wind_direction_100m"]).sum().item()
+
+            print(f"{year}: NaN en módulo = {nan_speed}, NaN en dirección = {nan_dir}")
+
+            ds.close()
+        except Exception as e:
+            print(f" Error al abrir {archivo}: {e}")
+    else:
+        print(f" Archivo no encontrado: {archivo}")
