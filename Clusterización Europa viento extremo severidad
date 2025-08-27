@@ -1,0 +1,60 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.cluster import KMeans
+from pathlib import Path
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib.colors as mcolors
+import ast
+
+ruta_csv = "F:/extremoscsv/total_extremos.csv"
+ruta_guardado = Path("C:/Users/kiker/Desktop/TFG/Clustering_Vientos")
+ruta_guardado.mkdir(parents=True, exist_ok=True)
+
+print("Leyendo archivo CSV de vientos extremos...")
+df = pd.read_csv(ruta_csv)
+df['sev_pdf'] = df['sev_pdf'].apply(ast.literal_eval)  
+X = np.vstack(df['sev_pdf'].values)
+
+print("Ejecutando KMeans con 5 clusters para vientos extremos...")
+kmeans = KMeans(n_clusters=5, random_state=0, n_init='auto')
+df['cluster_raw'] = kmeans.fit_predict(X)
+
+print("Ordenando clusters por severidad media de vientos...")
+medias = df.groupby('cluster_raw')['severidad_media'].mean()
+orden = medias.sort_values().index
+mapa_ordenado = {old: new for new, old in enumerate(orden)}
+df['cluster'] = df['cluster_raw'].map(mapa_ordenado)
+
+cmap_base = plt.get_cmap('tab10')
+colors = cmap_base(np.linspace(0, 1, 5))
+cmap = mcolors.ListedColormap(colors)
+bounds = np.arange(6) - 0.5
+norm = mcolors.BoundaryNorm(bounds, cmap.N)
+
+print("Generando gráfico de vientos extremos...")
+fig = plt.figure(figsize=(12, 8))
+ax = plt.axes(projection=ccrs.PlateCarree())
+ax.set_extent([-30, 50, 35, 75], crs=ccrs.PlateCarree())
+
+ax.add_feature(cfeature.LAND, facecolor='lightgray')
+ax.add_feature(cfeature.OCEAN, facecolor='lightblue')
+ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
+
+gl = ax.gridlines(draw_labels=True, linewidth=0.3, color='gray', alpha=0.5)
+gl.top_labels = False
+gl.right_labels = False
+
+scatter = ax.scatter(df['lon'], df['lat'], c=df['cluster'], cmap=cmap, norm=norm, s=20)
+cbar = plt.colorbar(scatter, ax=ax, ticks=np.arange(5), boundaries=bounds)
+cbar.set_label("Intensidad de vientos (cluster)")
+
+plt.title("Distribución de Vientos Extremos en Europa (1940 a 2024)", fontsize=14)
+
+output_path = ruta_guardado / "vientos_extremos_clusters.png"
+plt.savefig(output_path, dpi=300, bbox_inches='tight')
+plt.show()
+
+print(f"Análisis completado. Gráfico guardado en:\n{output_path}")
