@@ -1,0 +1,286 @@
+import pandas as pd
+from pathlib import Path
+
+ruta_base = Path("F:/prediccion/var_clim")
+
+archivos_csv = [
+    "averagescriberian5.csv",
+    "averagesdw2iberian5.csv",
+    "averagesgustiberian5.csv",
+    "averagesmsilberian5.csv",
+    "averagesolriberian5.csv",
+    "averagessmilberian5.csv",
+    "averagest2mlberian5.csv",
+    "averagestpiberian5.csv",
+    "averagesu10iberian5.csv",
+    "averagesv10iberian5.csv",
+    "averagesz500iberian5.csv"
+]
+
+def explorar_csv(ruta_archivo):
+    """Función para explorar un archivo CSV en detalle"""
+    try:
+        print(f"\n{'='*50}")
+        print(f"Explorando archivo: {ruta_archivo.name}")
+        print(f"{'='*50}")
+        
+        df = pd.read_csv(ruta_archivo, nrows=5)
+        
+        print("\nPrimeras filas del archivo:")
+        print(df.head().to_string())
+        
+        print("\n\nResumen de columnas:")
+        print(f"Número de columnas: {len(df.columns)}")
+        print("Nombres de columnas:")
+        for i, col in enumerate(df.columns, 1):
+            print(f"{i}. {col}")
+            
+        print("\nTipos de datos:")
+        print(df.dtypes.to_string())
+        
+        cols_fecha = [c for c in df.columns if 'date' in c.lower() or 'time' in c.lower() or 'fecha' in c.lower()]
+        cols_cluster = [c for c in df.columns if 'cluster' in c.lower()]
+        
+        print("\nColumnas especiales identificadas:")
+        print(f"Posibles columnas de fecha: {cols_fecha or 'No encontradas'}")
+        print(f"Posibles columnas de cluster: {cols_cluster or 'No encontradas'}")
+        
+        if cols_cluster:
+            print("\nValores únicos en columna cluster:")
+            print(df[cols_cluster[0]].unique())
+            
+    except Exception as e:
+        print(f"\nError al leer el archivo: {str(e)}")
+
+print("\nINICIANDO EXPLORACIÓN DE ARCHIVOS CSV")
+print(f"Directorio base: {ruta_base}\n")
+
+for archivo in archivos_csv:
+    ruta_completa = ruta_base / archivo
+    if ruta_completa.exists():
+        explorar_csv(ruta_completa)
+    else:
+        print(f"\n¡Archivo no encontrado!: {ruta_completa}")
+
+print("\nExploración completada")
+
+
+
+
+
+
+
+
+import pandas as pd
+from pathlib import Path
+import os
+
+ruta_base = Path("F:/prediccion/var_clim")
+ruta_salida = Path("F:/prediccion/resultados_unificados.csv")
+
+archivos_csv = [
+    "averagesdw2iberian5.csv",
+    "averagesgustiberian5.csv",
+    "averagesolriberian5.csv",
+    "averagestpiberian5.csv",
+    "averagesu10iberian5.csv",
+    "averagesv10iberian5.csv",
+    "averagesz500iberian5.csv"
+]
+
+def unificar_archivos():
+    """Función principal para unificar los archivos CSV"""
+    try:
+        print("="*50)
+        print("INICIANDO PROCESO DE UNIFICACIÓN")
+        print("="*50)
+        
+        df_unificado = None
+        
+        for archivo in archivos_csv:
+            ruta_completa = ruta_base / archivo
+            if not ruta_completa.exists():
+                print(f"\nAdvertencia: Archivo no encontrado - {archivo}")
+                continue
+            
+            print(f"\nProcesando archivo: {archivo}")
+            
+            df = pd.read_csv(ruta_completa)
+            
+            if 'Unnamed: 0' in df.columns:
+                df = df.rename(columns={'Unnamed: 0': 'fecha'})
+            
+            variable = archivo.replace("averages", "").replace("iberian5.csv", "")
+            
+            columnas_renombradas = {}
+            for col in df.columns:
+                if col == 'fecha':
+                    columnas_renombradas[col] = col
+                else:
+                    nuevo_nombre = f"{variable}_{col.split('_')[-1]}"
+                    columnas_renombradas[col] = nuevo_nombre
+            
+            df = df.rename(columns=columnas_renombradas)
+            
+            if df_unificado is None:
+                df_unificado = df
+            else:
+                df_unificado = pd.merge(df_unificado, df, on='fecha', how='outer')
+            
+            print(f"Archivo procesado. Columnas añadidas: {len(df.columns)-1}")
+        
+        if df_unificado is None:
+            raise ValueError("No se encontraron archivos válidos para procesar")
+        
+        df_unificado['fecha'] = pd.to_datetime(df_unificado['fecha'])
+        df_unificado = df_unificado.sort_values('fecha')
+        
+        print("\nGuardando archivo unificado...")
+        df_unificado.to_csv(ruta_salida, index=False)
+        
+        print("\n" + "="*50)
+        print("RESUMEN DE UNIFICACIÓN")
+        print("="*50)
+        print(f"Archivo de salida: {ruta_salida}")
+        print(f"Total de registros: {len(df_unificado)}")
+        print(f"Total de columnas: {len(df_unificado.columns)}")
+        print(f"Rango temporal: {df_unificado['fecha'].min().date()} a {df_unificado['fecha'].max().date()}")
+        
+        print("\nPrimeras filas del archivo unificado:")
+        print(df_unificado.head().to_string())
+        
+    except Exception as e:
+        print(f"\nError durante la unificación: {str(e)}")
+
+if __name__ == "__main__":
+    unificar_archivos()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import pandas as pd
+from datetime import datetime
+
+base_path = "F:/prediccion/var_clim_unificados.csv"
+df_base = pd.read_csv(base_path, parse_dates=['fecha'])
+
+df_base = df_base[(df_base['fecha'].dt.year >= 1950) & (df_base['fecha'].dt.year <= 2012)]
+
+enso_path = "F:/variables_climaticas/ENSO/ENSO_serie_temporal_1950_2024.csv"
+df_enso = pd.read_csv(enso_path, parse_dates=['Fecha'])
+df_enso = df_enso.rename(columns={'Anomalia': 'ENSO_anomalia'})
+
+df_base['year_month'] = df_base['fecha'].dt.to_period('M')
+df_enso['year_month'] = df_enso['Fecha'].dt.to_period('M')
+df_base = pd.merge(df_base, df_enso[['year_month', 'ENSO_anomalia']], on='year_month', how='left')
+
+moi1_path = "F:/variables_climaticas/MOI/pasar_a_csv/MOI1.csv"
+df_moi1 = pd.read_csv(moi1_path, parse_dates=['date'])
+df_moi1 = df_moi1.rename(columns={'value': 'MOI1'})
+df_base = pd.merge(df_base, df_moi1[['date', 'MOI1']], left_on='fecha', right_on='date', how='left')
+df_base = df_base.drop('date', axis=1)
+
+moi2_path = "F:/variables_climaticas/MOI/pasar_a_csv/MOI2.csv"
+df_moi2 = pd.read_csv(moi2_path, parse_dates=['date'])
+df_moi2 = df_moi2.rename(columns={'value': 'MOI2'})
+df_base = pd.merge(df_base, df_moi2[['date', 'MOI2']], left_on='fecha', right_on='date', how='left')
+df_base = df_base.drop('date', axis=1)
+
+wemoi_path = "F:/variables_climaticas/WeMOI/WeMOi_processed.csv"
+df_wemoi = pd.read_csv(wemoi_path, parse_dates=['Date'])
+df_wemoi['year_month'] = df_wemoi['Date'].dt.to_period('M')
+df_base = pd.merge(df_base, df_wemoi[['year_month', 'WeMOI']], on='year_month', how='left')
+
+nao_path = "F:/variables_climaticas/NAO/NAO_1950_2012.csv"
+df_nao = pd.read_csv(nao_path)
+df_nao['fecha'] = pd.to_datetime(df_nao[['year', 'month', 'day']])
+df_nao = df_nao.rename(columns={'ao_index_cdas': 'NAO_index'})
+df_base = pd.merge(df_base, df_nao[['fecha', 'NAO_index']], on='fecha', how='left')
+
+df_base = df_base.drop('year_month', axis=1)
+df_base = df_base.sort_values('fecha').reset_index(drop=True)
+
+output_path = "F:/prediccion/var_clim_unificados_con_indices.csv"
+df_base.to_csv(output_path, index=False)
+
+print(f"Archivo enriquecido guardado en: {output_path}")
+print(f"Variables añadidas: {[col for col in df_base.columns if col not in pd.read_csv(base_path).columns]}")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import pandas as pd
+import numpy as np
+
+input_path = "F:/prediccion/var_clim_unificados_con_indices.csv"
+df = pd.read_csv(input_path, parse_dates=['fecha'])
+
+shifts = {
+    'sequias': {
+        'ENSO_anomalia': 65,  
+        'MOI1': 1,           
+        'MOI2': 6,            
+        'NAO_index': 9,       
+        'WeMOI': 58           
+    },
+    'viento_extremo': {
+        'ENSO_anomalia': 60,
+        'MOI1': 1,
+        'MOI2': 8,
+        'NAO_index': 8,
+        'WeMOI': 68
+    },
+    'wind_gust': {
+        'ENSO_anomalia': 74,
+        'MOI1': 2,
+        'MOI2': 8,
+        'NAO_index': 2,
+        'WeMOI': 38
+    }
+}
+
+def create_shifted_version(df, shifts_dict, output_name):
+    df_shifted = df.copy()
+    
+    for var, shift in shifts_dict.items():
+        df_shifted[var] = df_shifted[var].shift(-shift)
+    
+    df_shifted = df_shifted.dropna()
+    
+    df_shifted = df_shifted[(df_shifted['fecha'].dt.year >= 1950) & 
+                           (df_shifted['fecha'].dt.year <= 2012)]
+    
+    output_path = f"F:/prediccion/var_clim_unificados_{output_name}.csv"
+    df_shifted.to_csv(output_path, index=False)
+    print(f"Archivo creado: {output_path}")
+    print(f"Registros finales: {len(df_shifted)}")
+    print("-------------------------------")
+
+create_shifted_version(df, shifts['sequias'], 'sequias')
+create_shifted_version(df, shifts['viento_extremo'], 'viento_extremo')
+create_shifted_version(df, shifts['wind_gust'], 'wind_gust')
