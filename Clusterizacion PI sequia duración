@@ -1,0 +1,62 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.cluster import KMeans
+from pathlib import Path
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib.colors as mcolors
+import ast
+
+ruta_csv = "E:/sequiascsv/total_sequias.csv"
+ruta_guardado = Path("Escritorio")
+ruta_guardado.mkdir(parents=True, exist_ok=True)
+
+print("Leyendo archivo CSV...")
+df = pd.read_csv(ruta_csv)
+df['dur_pdf'] = df['dur_pdf'].apply(ast.literal_eval)
+
+df = df[(df['lon'] >= -10) & (df['lon'] <= 4) & (df['lat'] >= 35.5) & (df['lat'] <= 44.5)]
+
+print("Ejecutando KMeans con 5 clusters...")
+X = np.vstack(df['dur_pdf'].values)
+kmeans = KMeans(n_clusters=5, random_state=0, n_init='auto')
+df['cluster_raw'] = kmeans.fit_predict(X)
+
+print("Ordenando clusters por duración media...")
+medias = df.groupby('cluster_raw')['duracion_media'].mean()
+orden = medias.sort_values().index
+mapa_ordenado = {old: new for new, old in enumerate(orden)}
+df['cluster'] = df['cluster_raw'].map(mapa_ordenado)
+
+cmap_base = plt.get_cmap('tab10')
+colors = cmap_base(np.linspace(0, 1, 5))
+cmap = mcolors.ListedColormap(colors)
+bounds = np.arange(6) - 0.5
+norm = mcolors.BoundaryNorm(bounds, cmap.N)
+
+print("Generando gráfico sobre mapa de la Península Ibérica...")
+fig = plt.figure(figsize=(10, 8))
+ax = plt.axes(projection=ccrs.PlateCarree())
+ax.set_extent([-10, 4, 35.5, 44.5], crs=ccrs.PlateCarree())
+
+ax.add_feature(cfeature.LAND, facecolor='lightgray')
+ax.add_feature(cfeature.OCEAN, facecolor='lightblue')
+ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
+
+gl = ax.gridlines(draw_labels=True, linewidth=0.3, color='gray', alpha=0.5)
+gl.top_labels = False
+gl.right_labels = False
+
+scatter = ax.scatter(df['lon'], df['lat'], c=df['cluster'], cmap=cmap, norm=norm, s=20)
+cbar = plt.colorbar(scatter, ax=ax, ticks=np.arange(5), boundaries=bounds)
+cbar.set_label("Cluster (ordenado por duración media)")
+
+plt.title("Clusters de Duración (5 grupos) - Península Ibérica", fontsize=14)
+
+output_path = ruta_guardado / "clustering_duracion_5_iberica.png"
+plt.savefig(output_path, dpi=300)
+plt.show()
+
+print(f"\nGráfico guardado en: {output_path}")
