@@ -1,0 +1,81 @@
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
+import xarray as xr
+import numpy as np
+import pandas as pd
+from pathlib import Path
+from scipy.stats import gaussian_kde
+
+nc_file = r"F:\moduloydireccion\2024modulo.nc"
+output_csv = Path("F:/csv/sequias2024.csv")
+timestep = '1h'
+percentil_umbral = 20
+
+x_dur = np.linspace(0, 100, 100)
+x_sev = np.linspace(0, 100, 100)
+
+def procesar_nodo(lat, lon, serie, threshold):
+    below_threshold = serie < threshold
+    df = pd.DataFrame({'wind': serie, 'below': below_threshold.astype(int)})
+    df['group'] = (df['below'].diff(1) != 0).cumsum()
+    drought_groups = df[df['below'] == 1].groupby('group')
+
+    durations = []
+    severities = []
+
+    for _, group in drought_groups:
+        durations.append(len(group))
+        severities.append((threshold - group['wind']).sum())
+
+    if not durations:
+        return None
+
+    try:
+        dur_pdf = gaussian_kde(durations)(x_dur)
+        sev_pdf = gaussian_kde(severities)(x_sev)
+
+        return {
+            'lat': lat,
+            'lon': lon,
+            'num_sequias': len(durations),
+            'duracion_media': np.mean(durations),
+            'severidad_media': np.mean(severities),
+            'dur_pdf': dur_pdf.tolist(),
+            'sev_pdf': sev_pdf.tolist()
+        }
+    except Exception as e:
+        print(f"Error en nodo ({lat}, {lon}): {e}")
+        return None
+
+ds = xr.open_dataset(nc_file)
+lats = ds['latitude'].values
+lons = ds['longitude'].values
+times = pd.to_datetime(ds['time'].values)
+
+viento_var = next((var for var in ds.data_vars if 'mod' in var.lower() or 'wind' in var.lower()), None)
+if viento_var is None:
+    raise KeyError("No se encontró la variable del módulo de viento en el NetCDF.")
+
+viento = ds[viento_var]
+data_rows = []
+
+for lat_idx, lat in enumerate(lats):
+    lat = float(lat)
+    for lon_idx, lon in enumerate(lons):
+        lon = float(lon)
+        serie = pd.Series(viento.isel(latitude=lat_idx, longitude=lon_idx).values, index=times)
+
+        if serie.isna().all():
+            continue
+
+        threshold = np.percentile(serie.dropna(), percentil_umbral)
+        resultado = procesar_nodo(lat, lon, serie, threshold)
+
+        if resultado:
+            data_rows.append(resultado)
+
+    print(f"Latitud {lat:.2f} completada.")
+
+pd.DataFrame(data_rows).to_csv(output_csv, index=False)
+print("CSV guardado en:", output_csv)
